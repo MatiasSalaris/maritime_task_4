@@ -1,5 +1,6 @@
 <script>
   import { agentColor, actionTag, worldState } from '../store/worldStore.js'
+  import { agentDecisionSummary, shortText } from './reasoningSummary.js'
 
   export let agent
   export let selected = false
@@ -11,21 +12,6 @@
   function agentName(id) {
     if (id === 'all') return 'ALL'
     return $worldState.agents?.find(a => a.id === id)?.name ?? id
-  }
-
-  function shortText(value, max = 110) {
-    const text = (value ?? '').replace(/\s+/g, ' ').trim()
-    if (text.length <= max) return text
-    return text.slice(0, max - 1).trimEnd() + '…'
-  }
-
-  function usefulThought(cot) {
-    return (cot ?? '')
-      .split('\n')
-      .map(s => s.trim())
-      .filter(Boolean)
-      .filter(s => !s.toLowerCase().startsWith('new mission'))
-      .at(-1)
   }
 
   $: comms = selected
@@ -56,8 +42,8 @@
   $: statusClr  = STATUS_COLOR[agent.status]  ?? '#ffffff'
   $: tag        = actionTag(agent.current_task)
   $: typeMeta   = TYPE_META[(agent.type ?? '').toUpperCase()] ?? TYPE_META.USV
-  $: taskText   = shortText(agent.current_task ?? 'Awaiting orders', 86)
-  $: noteText   = shortText(usefulThought(agent.cot_text), 130)
+  $: summary    = agentDecisionSummary(agent, $worldState.message_log)
+  $: taskText   = shortText(summary.decision, 86)
 
   function fmt(n) { return n?.toFixed(1) ?? '—' }
 
@@ -106,10 +92,20 @@
     <span class="action-task">{taskText}</span>
   </div>
 
-  {#if selected && noteText}
-    <div class="note">
-      <div class="detail-title">Latest reasoning</div>
-      <div class="note-text">{noteText}</div>
+  {#if selected}
+    <div class="reasoning-card">
+      <div class="reason-row">
+        <span class="reason-label">Decision</span>
+        <span class="reason-text primary-text">{summary.decision}</span>
+      </div>
+      <div class="reason-row">
+        <span class="reason-label">Why</span>
+        <span class="reason-text">{summary.why}</span>
+      </div>
+      <div class="reason-row">
+        <span class="reason-label">Coordination</span>
+        <span class="reason-text">{summary.coordination}</span>
+      </div>
     </div>
   {/if}
 
@@ -206,14 +202,34 @@
     line-height: 1.35;
   }
 
-  .note {
+  .reasoning-card {
     background: #06101a;
     border-radius: 4px;
     padding: 8px 10px;
     margin-bottom: 8px;
+    display: grid;
+    gap: 7px;
+  }
+  .reason-row {
+    display: grid;
+    grid-template-columns: 86px 1fr;
+    gap: 8px;
+    align-items: start;
   }
   .detail-title { font-size: 10px; color: #3a6a8a; letter-spacing: 0.08em; margin-bottom: 5px; text-transform: uppercase; }
-  .note-text { font-size: 12px; color: #b8dcec; font-family: monospace; line-height: 1.45; }
+  .reason-label {
+    color: #3a6a8a;
+    font-size: 10px;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+  }
+  .reason-text {
+    color: #b8dcec;
+    font-family: monospace;
+    font-size: 12px;
+    line-height: 1.4;
+  }
+  .primary-text { color: #e0f0ff; }
 
   .comms { background: #06101a; border-radius: 4px; padding: 8px 10px; margin-bottom: 8px; }
   .comms-list { display: flex; flex-direction: column; gap: 5px; max-height: 118px; overflow-y: auto;

@@ -1,29 +1,13 @@
 <script>
   import { onMount, onDestroy } from 'svelte'
   import { worldState, agentColor, actionTag } from '../store/worldStore.js'
+  import { agentDecisionSummary, shortText } from './reasoningSummary.js'
 
   export let agentLayerRef = null
   export let mapRef        = null
 
   let bubbles = []
   let raf
-
-  const MAX_TEXT = 76
-
-  function shortText(value, max = MAX_TEXT) {
-    const text = (value ?? '').replace(/\s+/g, ' ').trim()
-    if (text.length <= max) return text
-    return text.slice(0, max - 1).trimEnd() + '…'
-  }
-
-  function usefulThought(cot) {
-    return (cot ?? '')
-      .split('\n')
-      .map(s => s.trim())
-      .filter(Boolean)
-      .filter(s => !s.toLowerCase().startsWith('new mission'))
-      .at(-1)
-  }
 
   function update() {
     raf = requestAnimationFrame(update)
@@ -33,14 +17,14 @@
       .map(a => {
         const pos = agentLayerRef.getScreenPos(a.id)
         if (!pos) return null
-        const thought = usefulThought(a.cot_text)
-        if (!thought && !a.current_task) return null
+        const summary = agentDecisionSummary(a, $worldState.message_log)
+        if (!a.current_task && summary.why === 'No reasoning received yet.') return null
         return {
           agent: a,
           x: pos.x,
           y: pos.y,
-          task: shortText(a.current_task || 'Awaiting orders', 54),
-          thought: shortText(thought, 82),
+          task: shortText(summary.decision, 44),
+          why: shortText(summary.why, 58),
           tag: actionTag(a.current_task),
         }
       })
@@ -51,7 +35,7 @@
   onDestroy(() => cancelAnimationFrame(raf))
 </script>
 
-{#each bubbles as { agent, x, y, task, thought, tag } (agent.id)}
+{#each bubbles as { agent, x, y, task, why, tag } (agent.id)}
   {@const color = agentColor(agent.id)}
   <div class="bubble" style="left:{x}px; top:{y - 26}px; --clr:{color};">
     <div class="bhead">
@@ -61,8 +45,8 @@
 
     <div class="btask">{task}</div>
 
-    {#if thought}
-      <div class="note">{thought}</div>
+    {#if why && why !== 'No reasoning received yet.'}
+      <div class="note">{why}</div>
     {/if}
 
     <div class="tail"></div>
