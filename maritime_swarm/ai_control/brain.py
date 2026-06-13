@@ -57,7 +57,7 @@ class AgentBrain:
 
     async def run(self) -> None:
         await self.client.connect()
-        await self.client.send_cot(f"{self.ctx.agent_name} online — awaiting first decision.")
+        await self.client.send_cot(f"{self.ctx.agent_name} online — awaiting first decision.\n")
         try:
             while True:
                 msg = await self.client.recv()
@@ -83,13 +83,13 @@ class AgentBrain:
                 self.mission = incoming
                 self._mission_changed = True
                 logger.info("[%s] new mission: %s", self.ctx.agent_id, incoming)
-                asyncio.create_task(self.client.send_cot(f"New mission received — re-planning.\n{incoming}"))
+                asyncio.create_task(self.client.send_cot(f"New mission — re-planning: {incoming}\n"))
             else:
                 # Mission cleared (operator pressed Reset) → stop and idle.
                 self.mission = None
                 self._mission_changed = False
                 logger.info("[%s] mission cleared — holding station.", self.ctx.agent_id)
-                asyncio.create_task(self.client.send_cot("Mission cleared — holding station."))
+                asyncio.create_task(self.client.send_cot("Mission cleared — holding station.\n"))
                 asyncio.create_task(
                     self.client.send_action({"speed_kn": 0.0, "planned_path": [], "current_task": "Idle — awaiting orders"})
                 )
@@ -140,11 +140,12 @@ class AgentBrain:
             reasoning = decision.get("reasoning") or ""
             self.active_tool = tool
             logger.info("[%s] decision: %s | %s", self.ctx.agent_id, tool.describe(), reasoning)
-            await self.client.send_cot(f"{reasoning}\n→ {tool.describe()}")
+            thought = reasoning.strip() or f"Executing {tool.describe()}."
+            await self.client.send_cot(thought + "\n")
         except ToolError as exc:
             logger.warning("[%s] invalid tool call: %s", self.ctx.agent_id, exc)
             self._fallback()
-            await self.client.send_cot(f"(invalid tool call: {exc}) — patrolling.")
+            await self.client.send_cot(f"Invalid tool call ({exc}); falling back to patrol.\n")
         except Exception as exc:  # LLM/network error
             logger.warning("[%s] planner error: %s", self.ctx.agent_id, exc)
             self._fallback()

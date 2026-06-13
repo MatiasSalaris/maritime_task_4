@@ -197,9 +197,13 @@ class SimulatedPlatformProvider(AbstractPlatformProvider):
         agent = self._agent(agent_id)
         if agent:
             agent.cot_text += chunk
-            # Keep buffer bounded
-            if len(agent.cot_text) > 2000:
-                agent.cot_text = agent.cot_text[-2000:]
+            # Keep a rolling window of recent chain-of-thought (newline-separated
+            # thoughts). Trim from the front on a line boundary so the oldest
+            # visible thought stays whole.
+            if len(agent.cot_text) > 6000:
+                trimmed = agent.cot_text[-6000:]
+                nl = trimmed.find("\n")
+                agent.cot_text = trimmed[nl + 1:] if nl != -1 else trimmed
 
     # ── Internal helpers ──────────────────────────────────────────────────────
 

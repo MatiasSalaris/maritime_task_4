@@ -1,9 +1,23 @@
 <script>
-  import { agentColor } from '../store/worldStore.js'
+  import { agentColor, actionTag } from '../store/worldStore.js'
 
   export let agent
   export let selected = false
   export let onSelect = () => {}
+
+  // Keep the chain-of-thought pinned to the latest entry unless the user has
+  // scrolled up to read earlier reasoning (standard "stick to bottom" behaviour).
+  function stickyScroll(node) {
+    let stick = true
+    const nearBottom = () => node.scrollHeight - node.scrollTop - node.clientHeight < 28
+    const onScroll = () => { stick = nearBottom() }
+    const pin = () => { if (stick) node.scrollTop = node.scrollHeight }
+    node.addEventListener('scroll', onScroll)
+    const obs = new MutationObserver(pin)
+    obs.observe(node, { childList: true, subtree: true, characterData: true })
+    pin()
+    return { destroy() { node.removeEventListener('scroll', onScroll); obs.disconnect() } }
+  }
 
   const STATUS_LABEL = {
     operational: '● OPERATIONAL',
@@ -24,7 +38,8 @@
   $: color      = agentColor(agent.id)
   $: statusText = STATUS_LABEL[agent.status]  ?? agent.status
   $: statusClr  = STATUS_COLOR[agent.status]  ?? '#ffffff'
-  $: cotLines   = (agent.cot_text ?? '').split('\n').slice(-6).join('\n')
+  $: thoughts   = (agent.cot_text ?? '').split('\n').map(s => s.trim()).filter(Boolean)
+  $: tag        = actionTag(agent.current_task)
   $: typeMeta   = TYPE_META[(agent.type ?? '').toUpperCase()] ?? TYPE_META.USV
 
   function fmt(n) { return n?.toFixed(1) ?? '—' }
@@ -73,14 +88,19 @@
     </div>
   </div>
 
-  {#if agent.current_task}
-    <div class="task">{agent.current_task}</div>
-  {/if}
+  <div class="action-row">
+    <span class="action-tag" style="--t:{tag.color}">{tag.label}</span>
+    <span class="action-task">{agent.current_task ?? 'awaiting orders'}</span>
+  </div>
 
-  {#if cotLines}
+  {#if thoughts.length}
     <div class="cot">
-      <div class="cot-title">CHAIN OF THOUGHT</div>
-      <div class="cot-text">{cotLines}</div>
+      <div class="cot-title">CHAIN OF THOUGHT <span class="cot-count">({thoughts.length})</span></div>
+      <div class="cot-text" use:stickyScroll>
+        {#each thoughts as line, i}
+          <div class="cot-line" class:latest={i === thoughts.length - 1}>{line}</div>
+        {/each}
+      </div>
     </div>
   {/if}
 
@@ -130,15 +150,23 @@
   .mkey    { color: #4a7a9a; width: 32px; flex-shrink: 0; }
   .mval    { color: #c8d8e8; font-family: monospace; }
 
-  .task {
-    font-size: 12px;
-    color: #8ab0c0;
-    padding: 6px 8px;
-    background: #0a1820;
-    border-radius: 3px;
-    border-left: 2px solid var(--agent-color);
+  .action-row {
+    display: flex;
+    align-items: center;
+    gap: 8px;
     margin-bottom: 8px;
-    line-height: 1.4;
+  }
+  .action-tag {
+    font-size: 10px; font-weight: bold; letter-spacing: 0.08em;
+    color: var(--t, #00d4ff);
+    border: 1px solid var(--t, #00d4ff);
+    border-radius: 3px; padding: 2px 7px;
+    background: color-mix(in srgb, var(--t, #00d4ff) 14%, transparent);
+    white-space: nowrap; flex-shrink: 0;
+  }
+  .action-task {
+    font-size: 12px; color: #b6d4e4; font-family: monospace;
+    line-height: 1.35; overflow: hidden; text-overflow: ellipsis;
   }
 
   .cot {
@@ -148,9 +176,19 @@
     margin-bottom: 8px;
   }
   .cot-title { font-size: 10px; color: #3a6a8a; letter-spacing: 0.1em; margin-bottom: 5px; }
+  .cot-count { color: #2a4a5a; }
   .cot-text  {
-    font-size: 12px; color: #8ab8d0; font-family: monospace;
-    white-space: pre-wrap; line-height: 1.5; max-height: 90px; overflow: hidden;
+    max-height: 168px; overflow-y: auto;
+    display: flex; flex-direction: column; gap: 4px;
+    scrollbar-width: thin; scrollbar-color: #1a3a5a transparent;
+  }
+  .cot-line {
+    font-size: 12px; color: #5f8296; font-family: monospace;
+    white-space: pre-wrap; line-height: 1.45;
+    padding-left: 8px; border-left: 2px solid #15303f;
+  }
+  .cot-line.latest {
+    color: #b8dcec; border-left-color: var(--agent-color);
   }
 
   .controls { display: flex; gap: 6px; }

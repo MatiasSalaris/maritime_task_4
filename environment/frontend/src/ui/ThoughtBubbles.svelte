@@ -1,6 +1,6 @@
 <script>
   import { onMount, onDestroy } from 'svelte'
-  import { worldState, agentColor } from '../store/worldStore.js'
+  import { worldState, agentColor, actionTag } from '../store/worldStore.js'
 
   export let agentLayerRef = null
   export let mapRef        = null
@@ -8,15 +8,25 @@
   let bubbles = []
   let raf
 
+  // How many recent thoughts to show in the floating bubble (the side-panel
+  // AgentCard shows the full, scrollable chain).
+  const MAX_LINES = 4
+
   function update() {
     raf = requestAnimationFrame(update)
     if (!agentLayerRef || !mapRef) return
 
     bubbles = ($worldState.agents ?? [])
-      .filter(a => a.cot_text)
       .map(a => {
         const pos = agentLayerRef.getScreenPos(a.id)
-        return pos ? { agent: a, x: pos.x, y: pos.y } : null
+        if (!pos) return null
+        const thoughts = (a.cot_text ?? '')
+          .split('\n')
+          .map(s => s.trim())
+          .filter(Boolean)
+          .slice(-MAX_LINES)
+        if (!thoughts.length && !a.current_task) return null
+        return { agent: a, x: pos.x, y: pos.y, thoughts, tag: actionTag(a.current_task) }
       })
       .filter(Boolean)
   }
@@ -25,11 +35,26 @@
   onDestroy(() => cancelAnimationFrame(raf))
 </script>
 
-{#each bubbles as { agent, x, y } (agent.id)}
+{#each bubbles as { agent, x, y, thoughts, tag } (agent.id)}
   {@const color = agentColor(agent.id)}
-  {@const lines = (agent.cot_text ?? '').split('\n').slice(-5).join('\n')}
-  <div class="bubble" style="left:{x}px; top:{y - 22}px; --clr:{color};">
-    <div class="cot">{lines}</div>
+  <div class="bubble" style="left:{x}px; top:{y - 26}px; --clr:{color};">
+    <div class="bhead">
+      <span class="bname">{agent.name}</span>
+      <span class="btag" style="--t:{tag.color}">{tag.label}</span>
+    </div>
+
+    {#if agent.current_task}
+      <div class="btask">{agent.current_task}</div>
+    {/if}
+
+    {#if thoughts.length}
+      <div class="cot">
+        {#each thoughts as line, i}
+          <div class="cot-line" class:latest={i === thoughts.length - 1}>{line}</div>
+        {/each}
+      </div>
+    {/if}
+
     <div class="tail"></div>
   </div>
 {/each}
@@ -38,26 +63,73 @@
   .bubble {
     position: absolute;
     transform: translate(-50%, -100%);
-    max-width: 260px;
-    min-width: 160px;
-    background: rgba(6, 12, 24, 0.93);
+    max-width: 300px;
+    min-width: 184px;
+    background: rgba(6, 12, 24, 0.94);
     border: 1px solid var(--clr, #00d4ff);
-    border-radius: 7px;
-    padding: 8px 11px;
+    border-radius: 8px;
+    padding: 7px 10px 9px;
     pointer-events: none;
     z-index: 30;
     backdrop-filter: blur(5px);
     box-shadow: 0 0 16px var(--clr, #00d4ff)33;
   }
-  .cot {
+
+  .bhead {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 8px;
+    margin-bottom: 5px;
+  }
+  .bname {
     font-family: monospace;
     font-size: 12px;
-    color: #b0d8e8;
-    white-space: pre-wrap;
-    line-height: 1.5;
-    max-height: 90px;
-    overflow: hidden;
+    font-weight: bold;
+    letter-spacing: 0.06em;
+    color: var(--clr, #00d4ff);
   }
+  .btag {
+    font-family: monospace;
+    font-size: 9.5px;
+    font-weight: bold;
+    letter-spacing: 0.08em;
+    color: var(--t, #00d4ff);
+    border: 1px solid var(--t, #00d4ff);
+    border-radius: 3px;
+    padding: 1px 6px;
+    background: color-mix(in srgb, var(--t, #00d4ff) 14%, transparent);
+    white-space: nowrap;
+  }
+
+  .btask {
+    font-family: monospace;
+    font-size: 11px;
+    color: #cfe6f2;
+    margin-bottom: 6px;
+    line-height: 1.35;
+    border-left: 2px solid var(--clr, #00d4ff);
+    padding-left: 6px;
+  }
+
+  .cot {
+    border-top: 1px solid #16283a;
+    padding-top: 5px;
+    display: flex;
+    flex-direction: column;
+    gap: 3px;
+  }
+  .cot-line {
+    font-family: monospace;
+    font-size: 11px;
+    line-height: 1.4;
+    color: #5f7e90;          /* older thoughts: dim */
+    white-space: pre-wrap;
+  }
+  .cot-line.latest {
+    color: #b8dcec;          /* current thought: bright */
+  }
+
   .tail {
     position: absolute;
     bottom: -7px;
