@@ -20,6 +20,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import re
 import time
 from typing import Any
 
@@ -33,7 +34,7 @@ from maritime_swarm.ai_control.observation import Observation
 from maritime_swarm.ai_control.planner import TacticalPlanner
 from maritime_swarm.ai_control.scene import Scene
 from maritime_swarm.ai_control.strategist import HeuristicStrategist, Strategist
-from maritime_swarm.ai_control.tools import Tool, ToolContext, ToolError, ToolRegistry
+from maritime_swarm.ai_control.tools import Tool, ToolContext, ToolError, ToolRegistry, ToolStatus
 from maritime_swarm.ai_control.world_client import WorldModelClient
 
 logger = logging.getLogger(__name__)
@@ -41,6 +42,7 @@ logger = logging.getLogger(__name__)
 STATUS_INTERVAL_S = 4.0       # world-time between status broadcasts
 NEGOTIATION_GRACE_S = 3.0     # wait this long (world time) before leading, so peers are known
 REACTIVE_INTERVAL_S = 4.0     # min wall-clock between tactician LLM calls
+_FOLLOW_WORDS = ("follow", "shadow", "escort", "track", "tail", "trail")
 
 
 class AgentBrain:
@@ -74,6 +76,7 @@ class AgentBrain:
         self._current_task: str | None = None
         self._negotiated_for: str | None = None
         self._planned_roster: set[str] = set()
+        self._planned_engaged: frozenset[str] = frozenset()
         self._thinking_strategy = False
         self._thinking_reactive = False
         self._last_reactive_think = 0.0
@@ -111,12 +114,13 @@ class AgentBrain:
             self.view.ingest(m.get("from_agent", ""), m.get("msg_type", ""), m.get("content", {}) or {})
         self.view.observe(obs.contacts)
 
-        # 2) mission set / change / clear
+        # 2) broadcast our status ALWAYS (even while idle) so peer awareness and
+        #    leader election stay stable across idle periods.
+        await self._maybe_broadcast_status(obs)
+
+        # 3) mission set / change / clear
         if not self._handle_mission(obs):
             return  # mission cleared → idling
-
-        # 3) broadcast our status (peer awareness + shared contacts)
-        await self._maybe_broadcast_status(obs)
 
         # 4) emergent negotiation (leader proposes; peers adopt)
         self._maybe_negotiate(obs)
@@ -195,6 +199,17 @@ class AgentBrain:
         live = self.view.live_member_ids()
         return bool(live) and live[0] == self.ctx.agent_id
 
+    def _engaged_map(self) -> dict[str, dict[str, Any]]:
+        """Agents (self + live peers) committed to a non-patrol task (e.g. escort)."""
+        engaged: dict[str, dict[str, Any]] = {}
+        if self.assignment and (self.assignment.get("kind") or "") == "escort":
+            engaged[self.ctx.agent_id] = self.assignment
+        for pid in self.view.live_peer_ids():
+            a = self.view.peers[pid].assignment
+            if a and (a.get("kind") or "") == "escort":
+                engaged[pid] = a
+        return engaged
+
     def _maybe_negotiate(self, obs: Observation) -> None:
         if self._thinking_strategy or self._t0 is None:
             return
@@ -204,31 +219,48 @@ class AgentBrain:
         if not self._is_leader():
             return
         roster = set(self.view.live_member_ids())
-        need = (self._negotiated_for != self.mission) or (roster != self._planned_roster)
+        engaged = frozenset(self._engaged_map())
+        # Re-plan on a new mission, a roster change, OR when a peer becomes
+        # (dis)engaged — so the remaining assets re-cover the area.
+        need = (
+            self._negotiated_for != self.mission
+            or roster != self._planned_roster
+            or engaged != self._planned_engaged
+        )
         if not need:
             return
         self._thinking_strategy = True
         self._negotiated_for = self.mission
         self._planned_roster = roster
+        self._planned_engaged = engaged
         asyncio.create_task(self._run_strategy(obs))
 
     async def _run_strategy(self, obs: Observation) -> None:
         try:
+            engaged = self._engaged_map()
             members = self._members(obs)
+            # Divide the area only among the un-engaged assets; keep the engaged
+            # ones on their current task.
+            to_allocate = [m for m in members if m["id"] not in engaged] or members
+            engaged_labels = {aid: assignment_label(a) for aid, a in engaged.items()}
             contacts = self._known_contacts(obs)
             plan = await asyncio.to_thread(
-                self.strategist.plan, self.mission, members, self.scene, contacts)
+                self.strategist.plan, self.mission, to_allocate, self.scene, contacts, engaged_labels)
+            allocation = dict(plan["allocation"])
+            allocation.update(engaged)   # engaged assets keep their task
             self.brief = plan["brief"]
             self.view.brief = plan["brief"]
-            self.view.allocation = plan["allocation"]
+            self.view.allocation = allocation
             self.view.last_proposal_t = obs.world_time
             await self.client.send_p2p(
                 "all", "proposal",
-                {"brief": plan["brief"], "allocation": plan["allocation"]},
+                {"brief": plan["brief"], "allocation": allocation},
                 reasoning=plan.get("reasoning") or "Proposed task division.")
-            await self.client.send_cot(f"Plan: {plan.get('reasoning') or 'task division proposed'}\n")
-            logger.info("[%s] (leader) proposed allocation: %s", self.ctx.agent_id,
-                        {k: assignment_label(v) for k, v in plan["allocation"].items()})
+            note = " (re-dividing around engaged asset)" if engaged else ""
+            await self.client.send_cot(f"Plan{note}: {plan.get('reasoning') or 'task division proposed'}\n")
+            logger.info("[%s] (leader) proposed allocation: %s%s", self.ctx.agent_id,
+                        {k: assignment_label(v) for k, v in allocation.items()},
+                        " | engaged=" + ",".join(engaged) if engaged else "")
         except Exception as exc:
             logger.warning("[%s] strategy failed (%s); using default sectors", self.ctx.agent_id, exc)
             self.view.allocation = default_allocation(self.view.live_member_ids(), self.scene.bounds)
@@ -315,10 +347,48 @@ class AgentBrain:
         if contact_id in self._handled:
             return True
         sc = self.view.contacts.get(contact_id)
-        return bool(sc and sc.reported)
+        if sc and sc.reported:
+            return True
+        # A live peer is already following this contact → don't pile on; the
+        # peer's status/handoff told us. We re-cover the area instead.
+        for pid in self.view.live_peer_ids():
+            a = self.view.peers[pid].assignment
+            if a and (a.get("kind") or "") == "escort" and a.get("contact_id") == contact_id:
+                return True
+        return False
 
     def _unhandled_suspicious(self, obs: Observation) -> bool:
         return any(c.is_suspicious and not self._already_handled(c.id) for c in obs.contacts)
+
+    def _is_follow_mission(self) -> bool:
+        return any(w in (self.mission or "").lower() for w in _FOLLOW_WORDS)
+
+    def _mission_standoff_m(self) -> float:
+        m = re.search(r"(\d{2,5})\s*m\b", (self.mission or "").lower())
+        return float(m.group(1)) if m else 500.0
+
+    async def _engage_escort(self, contact_id: str, standoff_m: float, reason: str) -> None:
+        """Commit to following a contact at a standoff — the agent's standing task."""
+        try:
+            self.baseline_tool = self.registry.build(
+                "escort_contact",
+                {"contact_id": contact_id, "standoff_m": standoff_m, "bearing_deg": 180.0}, self.ctx)
+            assignment = {"kind": "escort", "contact_id": contact_id,
+                          "standoff_m": standoff_m, "bearing_deg": 180.0}
+            self._dynamic_assignment = assignment
+            self.assignment = assignment
+            self._assignment_label = assignment_label(assignment)
+            self.reactive_tool = None
+            self._handled.add(contact_id)
+            logger.info("[%s] engaging — following %s at %d m", self.ctx.agent_id, contact_id, int(standoff_m))
+            await self.client.send_cot(reason + "\n")
+            await self.client.send_p2p(
+                "all", "handoff", {"assignment": assignment},
+                reasoning=f"Engaging: following unreported vessel {contact_id} at {int(standoff_m)} m.")
+        except ToolError as exc:
+            logger.info("[%s] cannot escort %s (%s)", self.ctx.agent_id, contact_id, exc)
+        finally:
+            self._thinking_reactive = False
 
     def _maybe_react(self, obs: Observation) -> None:
         if self.reactive_tool is not None or self._thinking_reactive:
@@ -326,6 +396,20 @@ class AgentBrain:
         # Once committed to following a vessel, stay on it.
         if self._dynamic_assignment is not None:
             return
+
+        # Follow/shadow mission: a sensed unreported vessel IS the target — engage
+        # it directly and deterministically (no fragile chase-to-identify, no
+        # dependence on a second LLM call). The escort then closes to the standoff.
+        if self._is_follow_mission():
+            target = next((c for c in obs.contacts
+                           if c.is_suspicious and not self._already_handled(c.id)), None)
+            if target is not None:
+                self._thinking_reactive = True
+                asyncio.create_task(self._engage_escort(
+                    target.id, self._mission_standoff_m(),
+                    f"Found unreported vessel {target.id} — following at {int(self._mission_standoff_m())} m."))
+                return
+
         pending = self._pending_report is not None
         # Don't keep reacting to contacts the team has already handled.
         if not pending and not self._unhandled_suspicious(obs):
@@ -359,23 +443,9 @@ class AgentBrain:
                 self._handled.add(cid)
                 await self.client.send_cot((d.get("reasoning") or f"Reporting {cid}") + "\n")
             elif action == "escort" and cid:
-                # Discovered the vessel to follow → make following its standing task.
-                standoff = d.get("standoff_m") or 500.0
-                assignment = {"kind": "escort", "contact_id": cid,
-                              "standoff_m": standoff, "bearing_deg": 180.0}
-                # Validate it builds (contact known) before committing.
-                self.baseline_tool = self.registry.build(
-                    "escort_contact",
-                    {"contact_id": cid, "standoff_m": standoff, "bearing_deg": 180.0}, self.ctx)
-                self._dynamic_assignment = assignment
-                self.assignment = assignment
-                self._assignment_label = assignment_label(assignment)
-                self.reactive_tool = None
-                self._handled.add(cid)
-                await self.client.send_cot((d.get("reasoning") or f"Following {cid} at {int(standoff)} m") + "\n")
-                await self.client.send_p2p(
-                    "all", "handoff", {"assignment": assignment},
-                    reasoning=f"Following unreported vessel {cid} at {int(standoff)} m.")
+                standoff = d.get("standoff_m") or self._mission_standoff_m()
+                await self._engage_escort(
+                    cid, standoff, d.get("reasoning") or f"Following {cid} at {int(standoff)} m")
             # else: continue on baseline
         except ToolError as exc:
             logger.info("[%s] reactive build rejected (%s)", self.ctx.agent_id, exc)
@@ -409,4 +479,11 @@ class AgentBrain:
                         self._pending_report = {"id": cid, "label": sc.label, "flagged": sc.flagged}
                 self.reactive_tool = None  # resume the baseline task
             else:
+                # If a follow/escort lost its contact, disengage and rejoin patrol
+                # (the leader re-divides once it sees we're no longer engaged).
+                if self._dynamic_assignment is not None and inv.status is ToolStatus.FAILED:
+                    logger.info("[%s] lost escorted contact — disengaging.", self.ctx.agent_id)
+                    asyncio.create_task(self.client.send_cot("Lost the contact — rejoining patrol.\n"))
+                    self._dynamic_assignment = None
+                    self.assignment = None
                 self.baseline_tool = self._build_baseline(self.assignment, obs) if self.assignment else None

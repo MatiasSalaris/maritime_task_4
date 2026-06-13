@@ -23,13 +23,18 @@ _VALID_KINDS = {"patrol_sector", "investigate", "escort", "visit_pois", "rendezv
 
 class Strategist(Protocol):
     def plan(
-        self, mission: str, members: list[dict[str, Any]], scene: Scene, contacts: list[dict[str, Any]]
+        self, mission: str, members: list[dict[str, Any]], scene: Scene,
+        contacts: list[dict[str, Any]], engaged: dict[str, str] | None = None,
     ) -> dict[str, Any]:
         ...
 
 
-def _normalise_plan(raw: dict[str, Any], members: list[dict[str, Any]], bounds: Bounds) -> dict[str, Any]:
+def _normalise_plan(
+    raw: dict[str, Any], members: list[dict[str, Any]], bounds: Bounds,
+    known_contact_ids: set[str] | None = None,
+) -> dict[str, Any]:
     member_ids = [m["id"] for m in members]
+    known = known_contact_ids or set()
     brief = raw.get("brief") if isinstance(raw.get("brief"), dict) else {}
     brief = {
         "objective": str(brief.get("objective") or "").strip(),
@@ -41,9 +46,15 @@ def _normalise_plan(raw: dict[str, Any], members: list[dict[str, Any]], bounds: 
     for aid in member_ids:
         a = raw_alloc.get(aid)
         if isinstance(a, dict) and (a.get("kind") in _VALID_KINDS):
-            if a["kind"] == "patrol_sector":
+            kind = a["kind"]
+            if kind == "patrol_sector":
                 a["sector"] = str(a.get("sector", "")).upper()
                 if a["sector"] not in SECTORS:
+                    a = None
+            elif kind in ("investigate", "escort"):
+                # Grounding: never assign a contact-bound task to an id that
+                # isn't a real, known contact (the LLM likes to invent <id>).
+                if str(a.get("contact_id", "")) not in known:
                     a = None
             if a:
                 alloc[aid] = a
@@ -58,21 +69,22 @@ class GroqStrategist:
     def __init__(self, api_key: str, model: str, temperature: float = 0.4) -> None:
         self.api_key, self.model, self.temperature = api_key, model, temperature
 
-    def plan(self, mission, members, scene, contacts):
+    def plan(self, mission, members, scene, contacts, engaged=None):
         raw = inferenza_json(
-            prompt=strategist_user_prompt(mission, members, scene, contacts),
+            prompt=strategist_user_prompt(mission, members, scene, contacts, engaged),
             api_key=self.api_key,
             system_prompt=strategist_system_prompt(),
             model=self.model,
             temperature=self.temperature,
         )
-        return _normalise_plan(raw, members, scene.bounds)
+        known_ids = {str(c.get("id")) for c in (contacts or [])}
+        return _normalise_plan(raw, members, scene.bounds, known_ids)
 
 
 class HeuristicStrategist:
     """Deterministic fallback: spread the team across sectors."""
 
-    def plan(self, mission, members, scene, contacts):
+    def plan(self, mission, members, scene, contacts, engaged=None):
         member_ids = [m["id"] for m in members]
         return {
             "reasoning": "Dividing the area into sectors for full coverage.",

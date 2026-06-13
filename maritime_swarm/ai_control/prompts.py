@@ -60,6 +60,9 @@ def strategist_system_prompt() -> str:
         '  - {"kind":"hold"}\n\n'
         "Guidance:\n"
         "- Bind to the assets, sectors, POIs and contacts you are given. Do NOT invent ids.\n"
+        "- Only use 'investigate'/'escort' with a SPECIFIC contact id from KNOWN CONTACTS. "
+        "If the mission is to find/locate/follow a vessel that is NOT yet in KNOWN CONTACTS, "
+        "assign patrol_sector to SEARCH — assets switch to following it automatically once one finds it.\n"
         "- Spread coverage: for a patrol, give different sectors to different assets.\n"
         "- For escort/formation, give each asset a different bearing_deg around the contact.\n"
         "- For sequential POIs, share the ordered list; converge on the rendezvous if asked.\n"
@@ -70,13 +73,22 @@ def strategist_system_prompt() -> str:
     )
 
 
-def strategist_user_prompt(mission: str, members: list[dict[str, Any]], scene: Scene, contacts: list[dict[str, Any]]) -> str:
-    lines = [f"MISSION: {mission}", "", "TEAM:", _roster_block(members), "", _scene_block(scene)]
+def strategist_user_prompt(
+    mission: str, members: list[dict[str, Any]], scene: Scene,
+    contacts: list[dict[str, Any]], engaged: dict[str, str] | None = None,
+) -> str:
+    lines = [f"MISSION: {mission}", "", "TEAM TO ALLOCATE:", _roster_block(members), "", _scene_block(scene)]
+    if engaged:
+        lines.append("ALREADY ENGAGED (do NOT reassign these — they are committed): " +
+                     "; ".join(f"{aid}={label}" for aid, label in engaged.items()))
     if contacts:
         lines.append("KNOWN CONTACTS: " + "; ".join(
             f"{c['id']}({c.get('label','?')}{',FLAGGED' if c.get('flagged') else ''})" for c in contacts))
     lines.append("")
-    lines.append("Produce the brief and an allocation assigning every listed asset. JSON only.")
+    lines.append(
+        "Produce the brief and an allocation assigning every asset in TEAM TO ALLOCATE. "
+        "Cover the whole operating area with the assets you have, even if some are engaged elsewhere. JSON only."
+    )
     return "\n".join(lines)
 
 
