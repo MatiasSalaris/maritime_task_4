@@ -48,6 +48,10 @@ services:
     env_file:
       - path: ../.env
         required: false
+    # Reach a host-run Ollama at LLM_BASE_URL=http://host.docker.internal:11434/v1
+    # (the responsive, rate-limit-free setup the challenge prescribes).
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     command: sh -c "pip install --no-cache-dir requests websockets && python -m maritime_swarm.ai_control"
     depends_on:
       - backend
