@@ -20,8 +20,9 @@ import requests
 
 from maritime_swarm.ai_control.brain import AgentBrain
 from maritime_swarm.ai_control.navigation_tools import default_registry
-from maritime_swarm.ai_control.planner import GroqPlanner, HeuristicPlanner, Planner
+from maritime_swarm.ai_control.planner import GroqTactician, HeuristicTactician, TacticalPlanner
 from maritime_swarm.ai_control.scene import Scene
+from maritime_swarm.ai_control.strategist import GroqStrategist, HeuristicStrategist, Strategist
 from maritime_swarm.ai_control.tools import ToolContext
 from maritime_swarm.ai_control.world_client import WorldModelClient
 
@@ -33,12 +34,14 @@ DEFAULT_MISSION = (
     "Keep the three assets dispersed for maximum sensor coverage and shadow anything suspicious."
 )
 
-# Cruise speeds (knots) used by the tools when transiting.
-_CRUISE_BY_TYPE = {"USV": 28.0, "UAV": 80.0}
+# Cruise speeds (knots) used by the tools when transiting. These are demo
+# parameters (the brief scores coordination, not flight dynamics) — fast enough
+# that an asset can actually run down a moving contact.
+_CRUISE_BY_TYPE = {"USV": 36.0, "UAV": 100.0}
 
 
 def _cruise_for(agent_type: str) -> float:
-    return _CRUISE_BY_TYPE.get(agent_type.upper(), 25.0)
+    return _CRUISE_BY_TYPE.get(agent_type.upper(), 30.0)
 
 
 def _wait_for_backend(http_url: str, timeout_s: float = 120.0) -> None:
@@ -81,8 +84,8 @@ async def run_swarm(
     http_url: str,
     ws_url: str,
     mission: str | None,
-    planner: Planner,
-    min_think_interval: float = 4.0,
+    strategist: Strategist,
+    tactician: TacticalPlanner,
 ) -> None:
     """Run the full AI-controlled swarm until cancelled.
 
@@ -96,9 +99,10 @@ async def run_swarm(
 
     agents = state.get("agents", [])
     logger.info(
-        "Controlling %d agents | planner=%s | area lat %.3f..%.3f lon %.3f..%.3f",
+        "Controlling %d agents | strategist=%s tactician=%s | area lat %.3f..%.3f lon %.3f..%.3f",
         len(agents),
-        type(planner).__name__,
+        type(strategist).__name__,
+        type(tactician).__name__,
         scene.bounds.lat_min,
         scene.bounds.lat_max,
         scene.bounds.lon_min,
@@ -108,29 +112,31 @@ async def run_swarm(
     brains: list[AgentBrain] = []
     for a in agents:
         agent_type = str(a.get("type", "USV")).upper()
+        sensor_km = float(a.get("sensor_range_km") or 4.0)
         ctx = ToolContext(
             agent_id=a["id"],
             agent_name=a.get("name", a["id"]),
             agent_type=agent_type,
             cruise_speed_kn=_cruise_for(agent_type),
             arrival_km=0.3,
+            # A contact is "identified" once well inside sensor range — no need
+            # to physically close to it, which a tail-chase makes impractical.
+            identify_km=max(0.8, 0.75 * sensor_km),
             bounds=scene.bounds,
         )
         client = WorldModelClient(ws_url, a["id"])
-        brains.append(
-            AgentBrain(client, ctx, planner, scene, mission, registry, min_think_interval)
-        )
+        brains.append(AgentBrain(client, ctx, strategist, tactician, scene, mission, registry))
 
     await asyncio.gather(*(b.run() for b in brains))
 
 
-def build_planner(api_key: str | None, model: str, force_fake: bool = False) -> Planner:
-    """Choose the real LLM planner when a key is available, else the fallback."""
+def build_brains(api_key: str | None, model: str, force_fake: bool = False) -> tuple[Strategist, TacticalPlanner]:
+    """Choose real-LLM planners when a key is available, else offline fallbacks."""
     if api_key and not force_fake:
-        logger.info("Using GroqPlanner (real LLM, model=%s)", model)
-        return GroqPlanner(api_key=api_key, model=model)
+        logger.info("Using Groq strategist + tactician (real LLM, model=%s)", model)
+        return GroqStrategist(api_key=api_key, model=model), GroqTactician(api_key=api_key, model=model)
     logger.warning(
-        "No API key (or FAKE_LLM set) — using HeuristicPlanner. "
-        "Set GROQ_API_KEY for real LLM decisions."
+        "No API key (or FAKE_LLM set) — using heuristic strategist + tactician. "
+        "Set GROQ_API_KEY for real LLM coordination."
     )
-    return HeuristicPlanner()
+    return HeuristicStrategist(), HeuristicTactician()

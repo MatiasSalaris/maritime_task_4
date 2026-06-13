@@ -9,6 +9,7 @@ const TYPE_COLORS = {
   objection:'#ff3355',
   handoff:  '#ffaa00',
   status:   '#888888',
+  report:   '#ff8800',
 }
 
 const TYPE_SYMBOLS = {
@@ -17,6 +18,7 @@ const TYPE_SYMBOLS = {
   objection:'✕',
   handoff:  '→',
   status:   '●',
+  report:   '⚑',
 }
 
 const DURATION_MS = 1500

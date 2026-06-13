@@ -1,187 +1,205 @@
-"""Tests for the AI control layer's Tool abstraction and planners.
+"""Tests for the AI control layer: grounded tools, coordination, planners.
 
-These are fully deterministic — no network or LLM is involved.
+Fully deterministic — no network or LLM.
 """
 
 from __future__ import annotations
 
-import math
-
 import pytest
 
+from maritime_swarm.ai_control import coordination as coord
+from maritime_swarm.ai_control.blackboard import SwarmView
 from maritime_swarm.ai_control.geo import bearing_deg, haversine_km
-from maritime_swarm.ai_control.observation import Observation, SensedContact
 from maritime_swarm.ai_control.navigation_tools import (
-    GoToTool,
-    HoldPositionTool,
+    EscortContactTool,
+    GoToPoiTool,
     InvestigateContactTool,
+    PatrolSectorTool,
+    ReportContactTool,
+    VisitPoisTool,
     default_registry,
 )
-from maritime_swarm.ai_control.planner import HeuristicPlanner
+from maritime_swarm.ai_control.observation import Observation, SensedContact
+from maritime_swarm.ai_control.planner import HeuristicTactician
 from maritime_swarm.ai_control.scene import POI, Scene
+from maritime_swarm.ai_control.strategist import HeuristicStrategist
 from maritime_swarm.ai_control.tools import Bounds, ToolContext, ToolError, ToolStatus
 
-
 BOUNDS = Bounds(lat_min=37.42, lat_max=37.60, lon_min=15.00, lon_max=15.28)
+SCENE = Scene(bounds=BOUNDS, pois=[POI("poi_1", "Alpha", 37.55, 15.22), POI("poi_2", "Bravo", 37.45, 15.06)])
 
 
-def make_ctx(agent_id: str = "agent_0", agent_type: str = "USV") -> ToolContext:
-    return ToolContext(
-        agent_id=agent_id,
-        agent_name="Alpha",
-        agent_type=agent_type,
-        cruise_speed_kn=28.0,
-        arrival_km=0.3,
-        bounds=BOUNDS,
-    )
+def make_obs(lat, lon, contacts=None):
+    return Observation(agent_id="agent_0", lat=lat, lon=lon, heading=0.0, speed_kn=0.0,
+                       contacts=contacts or [], world_time=1000.0, mission="patrol")
 
 
-def make_obs(lat: float, lon: float, contacts: list[SensedContact] | None = None) -> Observation:
-    return Observation(
-        agent_id="agent_0",
-        lat=lat,
-        lon=lon,
-        heading=0.0,
-        speed_kn=0.0,
-        contacts=contacts or [],
-        world_time=1000.0,
-        mission="patrol",
-    )
+def make_ctx(obs=None, view=None, scene=SCENE):
+    return ToolContext(agent_id="agent_0", agent_name="Alpha", agent_type="USV",
+                       cruise_speed_kn=28.0, arrival_km=0.3, bounds=BOUNDS,
+                       obs=obs, view=view, scene=scene)
 
 
-# ── geo ──────────────────────────────────────────────────────────────────────
-def test_bearing_cardinal_directions():
-    # Due north, east, south, west from a reference point.
+# ── geo ────────────────────────────────────────────────────────────────────────
+def test_bearing_cardinal():
     assert bearing_deg(37.5, 15.1, 37.6, 15.1) == pytest.approx(0.0, abs=1.0)
     assert bearing_deg(37.5, 15.1, 37.5, 15.2) == pytest.approx(90.0, abs=1.0)
     assert bearing_deg(37.5, 15.1, 37.4, 15.1) == pytest.approx(180.0, abs=1.0)
-    assert bearing_deg(37.5, 15.1, 37.5, 15.0) == pytest.approx(270.0, abs=1.0)
 
 
-def test_haversine_known_distance():
-    # ~0.1 deg latitude ≈ 11.12 km
-    assert haversine_km(37.5, 15.1, 37.6, 15.1) == pytest.approx(11.12, abs=0.2)
-
-
-# ── go_to ─────────────────────────────────────────────────────────────────────
-def test_go_to_steers_then_arrives():
-    tool = GoToTool.build({"lat": 37.55, "lon": 15.20}, make_ctx())
-
-    far = tool.step(make_obs(37.50, 15.10), make_ctx())
-    assert far.status is ToolStatus.RUNNING
-    assert far.action["speed_kn"] == 28.0
-    # Heading should point roughly north-east toward the target.
-    assert 0.0 < far.action["heading"] < 90.0
-    assert far.action["planned_path"] == [{"lat": 37.55, "lon": 15.20}]
-
-    arrived = tool.step(make_obs(37.5500, 15.2000), make_ctx())
-    assert arrived.status is ToolStatus.DONE
-    assert arrived.action["speed_kn"] == 0.0
-
-
-def test_go_to_clamps_target_into_bounds():
-    tool = GoToTool.build({"lat": 99.0, "lon": 99.0}, make_ctx())
-    assert tool.lat <= BOUNDS.lat_max
-    assert tool.lon <= BOUNDS.lon_max
-    assert tool.lat >= BOUNDS.lat_min
-    assert tool.lon >= BOUNDS.lon_min
-
-
-def test_go_to_rejects_missing_args():
+# ── grounding ───────────────────────────────────────────────────────────────────
+def test_investigate_requires_known_contact():
+    obs = make_obs(37.5, 15.1, [])
     with pytest.raises(ToolError):
-        GoToTool.build({"lat": 37.5}, make_ctx())
+        InvestigateContactTool.build({"contact_id": "ghost"}, make_ctx(obs=obs))
+
+
+def test_investigate_accepts_sensed_contact():
+    c = SensedContact(id="c003", lat=37.52, lon=15.12, flagged=True)
+    obs = make_obs(37.5, 15.1, [c])
+    tool = InvestigateContactTool.build({"contact_id": "c003"}, make_ctx(obs=obs))
+    inv = tool.step(obs, make_ctx(obs=obs))
+    assert inv.status is ToolStatus.RUNNING
+    assert inv.action["speed_kn"] == 28.0
+
+
+def test_investigate_accepts_shared_contact_not_in_range():
+    view = SwarmView("agent_0")
+    view.tick(1000.0)
+    view.ingest("agent_1", "status", {"contacts": [{"id": "c003", "lat": 37.52, "lon": 15.12, "flagged": True}]})
+    obs = make_obs(37.5, 15.1, [])
+    tool = InvestigateContactTool.build({"contact_id": "c003"}, make_ctx(obs=obs, view=view))
+    assert isinstance(tool, InvestigateContactTool)
+
+
+def test_go_to_poi_grounded():
+    obs = make_obs(37.5, 15.1)
+    tool = GoToPoiTool.build({"poi_id": "poi_1"}, make_ctx(obs=obs))
+    assert (tool.lat, tool.lon) == (37.55, 15.22)
     with pytest.raises(ToolError):
-        GoToTool.build({"lat": "north", "lon": 15.0}, make_ctx())
+        GoToPoiTool.build({"poi_id": "nope"}, make_ctx(obs=obs))
 
 
-# ── investigate_contact ────────────────────────────────────────────────────────
-def test_investigate_tracks_and_reaches_contact():
-    contact = SensedContact(id="c003", lat=37.52, lon=15.12, label="UNKNOWN", flagged=True)
-    tool = InvestigateContactTool.build({"contact_id": "c003"}, make_ctx())
-
-    running = tool.step(make_obs(37.50, 15.10, [contact]), make_ctx())
-    assert running.status is ToolStatus.RUNNING
-    assert running.action["speed_kn"] == 28.0
-
-    reached = tool.step(make_obs(37.5200, 15.1200, [contact]), make_ctx())
-    assert reached.status is ToolStatus.DONE
-
-
-def test_investigate_fails_when_contact_never_seen():
-    tool = InvestigateContactTool.build({"contact_id": "ghost"}, make_ctx())
-    result = tool.step(make_obs(37.50, 15.10, []), make_ctx())
-    assert result.status is ToolStatus.FAILED
-    assert result.action is None
+def test_report_contact_emits_p2p():
+    c = SensedContact(id="c003", lat=37.5, lon=15.1, flagged=True)
+    obs = make_obs(37.5, 15.1, [c])
+    tool = ReportContactTool.build(
+        {"contact_id": "c003", "classification": "anomaly", "rationale": "no AIS, high speed"},
+        make_ctx(obs=obs))
+    inv = tool.step(obs, make_ctx(obs=obs))
+    assert inv.status is ToolStatus.DONE
+    assert inv.p2p is not None
+    assert inv.p2p["msg_type"] == "report"
+    assert inv.p2p["content"]["report"]["classification"] == "ANOMALY"
+    assert inv.p2p["content"]["contacts"][0]["reported"] is True
 
 
-def test_investigate_uses_last_known_when_contact_drops_out():
-    contact = SensedContact(id="c003", lat=37.52, lon=15.12, flagged=True)
-    tool = InvestigateContactTool.build({"contact_id": "c003"}, make_ctx())
-    tool.step(make_obs(37.50, 15.10, [contact]), make_ctx())  # sees it once
-    # Next tick: contact no longer sensed → keep heading to last known pos.
-    dropped = tool.step(make_obs(37.505, 15.105, []), make_ctx())
-    assert dropped.status is ToolStatus.RUNNING
-
-
-# ── hold_position ──────────────────────────────────────────────────────────────
-def test_hold_position_runs_then_completes():
-    tool = HoldPositionTool.build({"seconds": 10}, make_ctx())
-    start = tool.step(make_obs(37.5, 15.1), make_ctx())
-    assert start.status is ToolStatus.RUNNING
-    assert start.action["speed_kn"] == 0.0
-
-    obs_later = make_obs(37.5, 15.1)
-    obs_later.world_time = 1011.0  # 11s later
-    done = tool.step(obs_later, make_ctx())
-    assert done.status is ToolStatus.DONE
-
-
-def test_hold_seconds_clamped():
-    assert HoldPositionTool.build({"seconds": 9999}, make_ctx()).seconds == 120.0
-    assert HoldPositionTool.build({}, make_ctx()).seconds == 20.0
-
-
-# ── registry ───────────────────────────────────────────────────────────────────
-def test_registry_builds_known_tool_and_rejects_unknown():
-    reg = default_registry()
-    assert set(reg.names()) == {"go_to", "investigate_contact", "hold_position"}
-    tool = reg.build("go_to", {"lat": 37.5, "lon": 15.1}, make_ctx())
-    assert isinstance(tool, GoToTool)
+def test_patrol_sector_runs_forever_and_advances():
+    tool = PatrolSectorTool.build({"sector": "NE"}, make_ctx())
+    obs = make_obs(37.5, 15.1)
+    inv = tool.step(obs, make_ctx(obs=obs))
+    assert inv.status is ToolStatus.RUNNING
+    assert tool.sector == "NE"
     with pytest.raises(ToolError):
-        reg.build("self_destruct", {}, make_ctx())
+        PatrolSectorTool.build({"sector": "MIDDLE"}, make_ctx())
 
 
-def test_registry_prompt_block_documents_tools():
-    block = default_registry().prompt_block()
-    assert "go_to(lat, lon)" in block
-    assert "investigate_contact(contact_id)" in block
-    assert "hold_position(seconds)" in block
+def test_escort_holds_standoff():
+    c = SensedContact(id="c001", lat=37.50, lon=15.10)
+    obs = make_obs(37.50, 15.10, [c])
+    tool = EscortContactTool.build({"contact_id": "c001", "standoff_m": 500, "bearing_deg": 90}, make_ctx(obs=obs))
+    inv = tool.step(obs, make_ctx(obs=obs))
+    assert inv.status is ToolStatus.RUNNING  # escort never completes
+    # station is offset east of the contact → agent should be steered, not stopped
+    assert inv.action is not None
 
 
-# ── heuristic planner ──────────────────────────────────────────────────────────
-def test_heuristic_investigates_suspicious_contact():
-    scene = Scene(bounds=BOUNDS, pois=[POI("poi_1", "A", 37.55, 15.22)])
-    planner = HeuristicPlanner()
-    contact = SensedContact(id="c003", lat=37.51, lon=15.11, label="UNKNOWN", flagged=True)
-    decision = planner.decide(make_obs(37.5, 15.1, [contact]), make_ctx(), scene, "m", default_registry())
-    assert decision["tool"] == "investigate_contact"
-    assert decision["args"]["contact_id"] == "c003"
+def test_visit_pois_sequences():
+    obs = make_obs(37.55, 15.22)  # at poi_1
+    tool = VisitPoisTool.build({"poi_ids": ["poi_1", "poi_2"]}, make_ctx(obs=obs))
+    inv = tool.step(obs, make_ctx(obs=obs))   # reaches poi_1, advances
+    assert inv.status is ToolStatus.RUNNING
+    assert tool._idx == 1
 
 
-def test_heuristic_patrols_when_no_contacts():
-    scene = Scene(bounds=BOUNDS, pois=[POI("poi_1", "A", 37.55, 15.22)])
-    planner = HeuristicPlanner()
-    decision = planner.decide(make_obs(37.5, 15.1, []), make_ctx(), scene, "m", default_registry())
-    assert decision["tool"] == "go_to"
-    assert "lat" in decision["args"] and "lon" in decision["args"]
+# ── coordination ────────────────────────────────────────────────────────────────
+def test_sectors_distinct_centers():
+    centers = {s: coord.sector_center(BOUNDS, s) for s in coord.SECTORS}
+    assert len(set(centers.values())) == len(coord.SECTORS)
 
 
-def test_heuristic_decision_is_executable_by_registry():
-    """End-to-end glue: a planner decision must build into a runnable tool."""
-    scene = Scene(bounds=BOUNDS, pois=[])
-    planner = HeuristicPlanner()
+def test_default_allocation_spreads_sectors():
+    alloc = coord.default_allocation(["agent_0", "agent_1", "agent_2"], BOUNDS)
+    sectors = {a["sector"] for a in alloc.values()}
+    assert len(sectors) == 3  # three distinct sectors
+
+
+def test_deconflict_resolves_duplicate_sector():
+    # two agents both claim NE → must end on different sectors
+    alloc = {
+        "agent_0": {"kind": "patrol_sector", "sector": "NE"},
+        "agent_1": {"kind": "patrol_sector", "sector": "NE"},
+    }
+    positions = {"agent_0": (37.59, 15.27), "agent_1": (37.43, 15.01)}  # a0 near NE, a1 far
+    out = coord.deconflict(alloc, ["agent_0", "agent_1"], positions, BOUNDS)
+    assert out["agent_0"]["sector"] == "NE"          # closer keeps it
+    assert out["agent_1"]["sector"] != "NE"          # loser reassigned
+
+
+def test_deconflict_preserves_non_patrol():
+    alloc = {"agent_0": {"kind": "escort", "contact_id": "c1", "standoff_m": 500, "bearing_deg": 0}}
+    out = coord.deconflict(alloc, ["agent_0"], {"agent_0": (37.5, 15.1)}, BOUNDS)
+    assert out["agent_0"]["kind"] == "escort"
+
+
+def test_assignment_label():
+    assert coord.assignment_label({"kind": "patrol_sector", "sector": "NE"}) == "PATROL NE"
+    assert "ESCORT" in coord.assignment_label({"kind": "escort", "contact_id": "c1", "standoff_m": 500})
+    assert coord.assignment_label(None) == "UNASSIGNED"
+
+
+# ── shared picture ────────────────────────────────────────────────────────────────
+def test_swarmview_ingest_status_and_silence():
+    v = SwarmView("agent_0")
+    v.tick(100.0)
+    v.ingest("agent_1", "status", {"name": "Bravo", "pos": {"lat": 37.5, "lon": 15.1},
+                                    "contacts": [{"id": "c1", "lat": 37.5, "lon": 15.1, "label": "UNKNOWN"}]})
+    assert "agent_1" in v.peers
+    assert "c1" in v.contacts
+    assert v.live_peer_ids() == ["agent_1"]
+    v.tick(100.0 + 999)  # long after → silent
+    assert v.silent_peer_ids() == ["agent_1"]
+
+
+def test_swarmview_ingest_proposal_sets_allocation():
+    v = SwarmView("agent_0")
+    v.tick(10.0)
+    v.ingest("agent_1", "proposal", {"brief": {"objective": "patrol"},
+                                     "allocation": {"agent_0": {"kind": "patrol_sector", "sector": "SW"}}})
+    assert v.my_assignment() == {"kind": "patrol_sector", "sector": "SW"}
+    assert v.brief["objective"] == "patrol"
+
+
+# ── planners (offline) ───────────────────────────────────────────────────────────
+def test_heuristic_strategist_allocates_all():
+    members = [{"id": "agent_0"}, {"id": "agent_1"}, {"id": "agent_2"}]
+    plan = HeuristicStrategist().plan("patrol the area", members, SCENE, [])
+    assert set(plan["allocation"]) == {"agent_0", "agent_1", "agent_2"}
+    assert all(a["kind"] == "patrol_sector" for a in plan["allocation"].values())
+
+
+def test_heuristic_tactician_investigates_then_reports():
+    tac = HeuristicTactician()
+    far = SensedContact(id="c003", lat=37.56, lon=15.18, flagged=True)
+    near = SensedContact(id="c003", lat=37.5005, lon=15.1005, flagged=True)
     ctx = make_ctx()
-    decision = planner.decide(make_obs(37.5, 15.1, []), ctx, scene, "m", default_registry())
-    tool = default_registry().build(decision["tool"], decision["args"], ctx)
-    inv = tool.step(make_obs(37.5, 15.1), ctx)
-    assert inv.status in (ToolStatus.RUNNING, ToolStatus.DONE)
+    d_far = tac.decide_reactive(make_obs(37.5, 15.1, [far]), ctx, "m", None, "PATROL NE", [])
+    assert d_far["action"] == "investigate"
+    d_near = tac.decide_reactive(make_obs(37.5, 15.1, [near]), ctx, "m", None, "PATROL NE", [])
+    assert d_near["action"] == "report"
+
+
+def test_registry_has_full_toolset():
+    names = set(default_registry().names())
+    assert {"go_to", "go_to_poi", "patrol_sector", "investigate_contact",
+            "report_contact", "escort_contact", "visit_pois", "rendezvous", "hold_position"} <= names

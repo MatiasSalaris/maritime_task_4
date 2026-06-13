@@ -1,103 +1,110 @@
 # AI Control Layer
 
-The **brain** side of the maritime swarm. It drives the agents in the world
-model (`environment/backend`) using **real LLM output**, via a first-class
-**Tool** abstraction. It is kept strictly separate from the world model: it
-imports none of the simulator and talks only over the world model's public
-WebSocket + REST contract.
+The **brain** side of the swarm: a decentralised, LLM-driven coordination layer
+for the three maritime assets in the world model (`environment/backend`). It is
+kept strictly separate from the world model — it imports none of the simulator
+and talks only over the public WebSocket + REST contract. There is **no central
+planner**: coordination emerges peer-to-peer over the world model's message bus,
+which is also what the frontend renders.
 
-## How it works
+## Architecture
 
 ```
- world model (environment/backend)            AI control (this package)
- ───────────────────────────────              ─────────────────────────
-  ws/agent/{id}  ──observation──►  WorldModelClient ──► AgentBrain
-                                                          │
-                                            (idle / new contact?)
-                                                          │  build prompt
-                                                          ▼
-                                                       Planner ── LLM ──► {tool, args, reasoning}
-                                                          │
-                                            ToolRegistry.build(tool, args)
-                                                          │
-  apply_action  ◄────action────   WorldModelClient ◄── Tool.step(obs)  (each tick)
+ world model (WebSocket + REST)            AI control (this package)
+ ──────────────────────────────           ─────────────────────────
+  observation (10 Hz) ───────►  WorldModelClient ──► AgentBrain ── SwarmView (shared picture)
+                                                       │
+                          ┌────────────────────────────┼─────────────────────────────┐
+                          │ STRATEGIC (leader only)     │ TACTICAL (every agent)       │
+                          │ Strategist.plan(): interpret│ Tactician.decide_reactive(): │
+                          │ mission → brief + allocation│ react to a sensed contact    │
+                          └────────────────────────────┼─────────────────────────────┘
+                                                       │
+                       baseline task (deterministic) + reactive tool (LLM-chosen)
+  apply_action ◄── action ── WorldModelClient ◄── Tool.step(obs)   (each tick)
+  p2p messages ◄── proposal / ack / status / report ──┘   (visible negotiation)
 ```
 
-1. **Observation** (10 Hz) → parsed into a typed `Observation`.
-2. When the agent is **idle** (or a new suspicious contact appears), the
-   **Planner** asks the LLM to choose one tool. The reasoning is streamed back
-   as a `cot_chunk` (shown in the frontend thought bubbles).
-3. The chosen **Tool** is validated + built by the `ToolRegistry`, then executed
-   tick-by-tick: each `step(obs)` returns a world action (heading/speed/path)
-   until the tool reports `DONE`/`FAILED`.
+Two LLM roles, both small open-weight models via Groq:
+
+- **Strategist** (run by the *leader* — the lowest-id live asset, the entry
+  point for the human's mission): interprets the natural-language mission into a
+  structured brief `{objective, constraints, priority}` and proposes a division
+  of labour (`allocation`: each asset → an assignment). Broadcast as a P2P
+  `proposal`. Peers `ack` (or the plan is adjusted). If the leader goes silent,
+  the next asset takes over — no privileged node.
+- **Tactician** (every agent): the assigned **baseline task** runs
+  deterministically (patrol a sector, escort, visit POIs…); the tactician LLM is
+  consulted only to *react* to what an asset senses — investigate a contact, or
+  report it with a rationale — then the agent returns to its task.
+
+### Convergence without a commander
+
+The negotiation is LLM-driven and visible (proposals/acks on the bus). To
+guarantee it actually *converges* — the brief's "coherence without a commander"
+tension — every agent also runs an **identical, deterministic de-confliction**
+(`coordination.deconflict`) locally over the shared picture. Same inputs + same
+rule ⇒ the same allocation in every agent, with no central authority. The LLM
+provides the legible argument; the backstop guarantees no deadlock/oscillation.
+
+### Grounding
+
+Tools validate their arguments against the live observation + shared picture at
+build time (`navigation_tools`): you cannot `investigate_contact` or
+`report_contact` an id that isn't sensed or known. Symbolic targets (sectors,
+POI ids, contact ids) are used instead of raw lat/lon so the small model can't
+drift. This is the "acting on fluent nonsense" guard.
 
 ## Tools
 
-| Tool | Signature | Behaviour |
-|------|-----------|-----------|
-| `go_to` | `go_to(lat, lon)` | Transit to a waypoint (clamped to the operating area); stop on arrival. |
-| `investigate_contact` | `investigate_contact(contact_id)` | Close on a sensed contact to identify it; tracks it as it moves. |
-| `hold_position` | `hold_position(seconds)` | Stop and observe for a while. |
+| Tool | Purpose |
+|------|---------|
+| `patrol_sector(sector)` | continuously sweep a quadrant/centre — patrol baseline |
+| `go_to(lat, lon)` / `go_to_poi(poi_id)` | transit to a point / named POI |
+| `investigate_contact(contact_id)` | close on a known contact to identify it |
+| `report_contact(contact_id, classification, rationale)` | broadcast an anomaly report |
+| `escort_contact(contact_id, standoff_m, bearing_deg)` | hold a formation slot (Scenario C) |
+| `visit_pois(poi_ids, rendezvous?)` | sequential POIs then converge (Scenario D) |
+| `rendezvous(poi_id)` | converge on a point |
+| `hold_position(seconds)` | stop and observe |
 
-Adding a tool = subclass `Tool` (declare `name`/`description`/`parameters`,
-implement `build` + `step`) and register it in `navigation_tools.default_registry`.
+Assignments map to baseline tools; the tactician picks `investigate` / `report`
+reactively. Missions are **persistent** — see [persistent operations](../../).
 
 ## Running
 
-### Docker (recommended) — starts automatically
-
-The AI layer is wired into both compose files as the `ai` service, so it boots
-together with the world model and frontend:
-
-```bash
-# put your key in the repo-root .env (GROQ_API_KEY=...), then:
-docker compose -f environment/docker-compose.dev.yml up   # dev (frontend on :5173)
-docker compose -f environment/docker-compose.yml up        # prod (frontend on :3000)
-```
-
-The `ai` container reads `GROQ_API_KEY` (and optional `GROQ_MODEL` / `MISSION`)
-from the repo-root `.env`. Quoted values are tolerated. With no key it falls
-back to the offline heuristic planner.
-
-### Standalone process
-
-The world model must already be running.
-
-```bash
-# from the repo root
-export GROQ_API_KEY=sk-...            # real LLM decisions (Groq)
-pip install -r maritime_swarm/ai_control/requirements.txt
-python -m maritime_swarm.ai_control
-```
-
-Or the one-shot script that boots the world model + frontend and then the brains:
-
-```bash
-export GROQ_API_KEY=sk-...
-./run_simulation.sh
-```
-
-Watch it at <http://localhost:5173> (dev) or <http://localhost:3000> (prod).
-
-### Live missions
-
-Type/change the mission in the frontend at any time. The brains watch the
-mission in their observation stream and **re-plan immediately** when it changes —
-no restart needed. Mission precedence at startup: `MISSION` env > the mission
-already set in the world > the built-in default patrol order.
-
-### Environment variables
+The AI layer auto-starts as the `ai` service in both compose files; put your key
+in the repo-root `.env` (`GROQ_API_KEY=...`) and `docker compose up`. Or run
+standalone: `python -m maritime_swarm.ai_control` (see env vars below). Without a
+key it falls back to deterministic heuristic strategist + tactician.
 
 | Var | Default | Meaning |
 |-----|---------|---------|
-| `GROQ_API_KEY` / `API_KEY` | – | LLM key. **Omit to run the offline heuristic planner.** |
-| `GROQ_MODEL` | `llama-3.1-8b-instant` | Model name. |
-| `WORLD_HTTP_URL` | `http://localhost:8000` | World model REST base. |
-| `WORLD_WS_URL` | `ws://localhost:8000` | World model WS base. |
-| `MISSION` | patrol order | Mission text given to the swarm. |
-| `THINK_INTERVAL` | `4` | Min seconds between LLM calls per agent. |
-| `FAKE_LLM` | `0` | Force the heuristic planner (offline testing). |
+| `GROQ_API_KEY`/`API_KEY` | – | LLM key (quoted values tolerated) |
+| `GROQ_MODEL` | `llama-3.1-8b-instant` | model |
+| `WORLD_HTTP_URL` / `WORLD_WS_URL` | localhost:8000 | world model |
+| `MISSION` | – | override (else adopts the world's mission) |
+| `FAKE_LLM` | `0` | force the offline heuristic planners |
 
-Without a key the `HeuristicPlanner` runs the exact same loop deterministically
-(investigate suspicious contacts, otherwise patrol) so the simulation still
-works offline and in tests.
+## Where the swarm breaks (honest limits)
+
+- **LLM rate limits.** Three agents on a free-tier key hit `429 Too Many
+  Requests` under load. Handled gracefully — the agent logs it and stays on its
+  baseline task — but heavy reactive bursts can drop individual decisions. A
+  bigger budget or local serving (Ollama) removes this.
+- **Small-model judgement.** `llama-3.1-8b-instant` occasionally mis-allocates
+  or mis-classifies; the deterministic de-confliction and grounding catch the
+  worst cases, but a 70B model is visibly better. Symbolic targets hide most
+  spatial-reasoning errors.
+- **Negotiation depth.** Convergence currently leans on the deterministic
+  backstop rather than rich multi-round objection/counter-proposal; true
+  argument is shallow (propose → ack), by design, for reliability on the clock.
+- **Shared-picture staleness.** Peer awareness is only as fresh as the last
+  `status` broadcast (every few seconds); a peer is declared silent after ~9 s.
+  Fast-moving contacts can be briefly out of date across the team.
+- **Redundant reactions.** Two assets can momentarily both react to the same new
+  contact before the report propagates; they de-duplicate once it is reported,
+  but not instantaneously.
+- **Tail-chase limits.** An asset only marginally faster than a contact closes
+  slowly; identification therefore completes at a fraction of sensor range
+  rather than on physical contact.

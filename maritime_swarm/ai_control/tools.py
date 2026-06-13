@@ -59,14 +59,24 @@ class Bounds:
 
 @dataclass
 class ToolContext:
-    """Per-agent execution context shared with every tool the agent runs."""
+    """Per-agent execution context shared with every tool the agent runs.
+
+    ``obs``, ``view`` and ``scene`` are refreshed each tick by the brain so that
+    tools can validate their arguments against the real world state at build
+    time (grounding) and look up symbolic targets (POIs, sectors, contacts).
+    They are typed loosely to avoid import cycles.
+    """
 
     agent_id: str
     agent_name: str
     agent_type: str            # "USV" | "UAV"
     cruise_speed_kn: float
     arrival_km: float = 0.3
+    identify_km: float = 1.2   # range at which a contact is considered identified
     bounds: Bounds | None = None
+    obs: Any = None            # current Observation
+    view: Any = None           # SwarmView (shared picture)
+    scene: Any = None          # Scene (operating area + POIs)
 
 
 class ToolStatus(str, Enum):
@@ -77,11 +87,16 @@ class ToolStatus(str, Enum):
 
 @dataclass
 class ToolInvocation:
-    """One step's result: an optional world action plus the tool's status."""
+    """One step's result: an optional world action plus the tool's status.
+
+    ``p2p`` lets a tool request a peer-to-peer message be sent as a side-effect
+    (e.g. report_contact announcing an anomaly). The brain dispatches it.
+    """
 
     action: dict[str, Any] | None
     status: ToolStatus
     note: str = ""
+    p2p: dict[str, Any] | None = None   # {to, msg_type, content, reasoning}
 
     @property
     def finished(self) -> bool:

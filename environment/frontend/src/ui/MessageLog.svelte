@@ -14,6 +14,7 @@
     objection:'✕',
     handoff:  '→',
     status:   '●',
+    report:   '⚑',
   }
   const TYPE_COLOR = {
     proposal: '#00d4ff',
@@ -21,7 +22,12 @@
     objection:'#ff3355',
     handoff:  '#ffaa00',
     status:   '#666',
+    report:   '#ff8800',
   }
+
+  // Coordination + reports on the log; high-frequency 'status' heartbeats stay
+  // off it (they still animate as packets on the map).
+  $: visibleLog = ($worldState.message_log ?? []).filter(m => m.msg_type !== 'status')
 
   function agentName(id) {
     const a = $worldState.agents?.find(a => a.id === id)
@@ -38,7 +44,7 @@
 <div class="log-section">
   <div class="title">MESSAGE LOG</div>
   <div class="log" bind:this={el}>
-    {#each ($worldState.message_log ?? []) as msg (msg.id)}
+    {#each visibleLog as msg (msg.id)}
       <div class="entry">
         <span class="ts">{ts(msg.sent_at)}</span>
         <span class="icon" style="color:{TYPE_COLOR[msg.msg_type] ?? '#888'}">
@@ -53,7 +59,7 @@
         <div class="reasoning">{msg.reasoning}</div>
       {/if}
     {/each}
-    {#if !($worldState.message_log?.length)}
+    {#if !visibleLog.length}
       <div class="empty">Awaiting messages…</div>
     {/if}
   </div>

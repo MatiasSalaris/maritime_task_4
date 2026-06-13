@@ -21,7 +21,7 @@ import asyncio
 import logging
 import os
 
-from maritime_swarm.ai_control.controller import build_planner, run_swarm
+from maritime_swarm.ai_control.controller import build_brains, run_swarm
 from maritime_swarm.infrastructure.environment_config import configured_model, load_dotenv
 
 
@@ -41,17 +41,16 @@ def main() -> None:
     # No MISSION env → adopt whatever mission is set in the world (e.g. typed
     # in the frontend); the controller falls back to the default if none.
     mission = _clean(os.getenv("MISSION")) or None
-    think_interval = float(_clean(os.getenv("THINK_INTERVAL"), "4"))
     force_fake = _clean(os.getenv("FAKE_LLM"), "0").lower() in ("1", "true", "yes")
     # Strip surrounding quotes/whitespace: Docker Compose env_file passes values
     # literally (a quoted .env value would otherwise carry the quotes through).
     api_key = _clean(os.getenv("GROQ_API_KEY") or os.getenv("API_KEY")) or None
     model = _clean(os.getenv("GROQ_MODEL")) or configured_model()
 
-    planner = build_planner(api_key, model, force_fake=force_fake)
+    strategist, tactician = build_brains(api_key, model, force_fake=force_fake)
 
     try:
-        asyncio.run(run_swarm(http_url, ws_url, mission, planner, think_interval))
+        asyncio.run(run_swarm(http_url, ws_url, mission, strategist, tactician))
     except KeyboardInterrupt:
         print("\nShutting down AI control.")
 

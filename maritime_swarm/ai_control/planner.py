@@ -1,12 +1,15 @@
-"""Decision planners: turn a situation into a tool call.
+"""Tactical planner: decide whether to react to a sensed contact.
 
-A planner is asked ``decide(obs, ctx, scene, mission, registry)`` and returns a
-decision dict ``{"reasoning", "tool", "args"}``.
+Each agent's baseline task (patrol sector, escort, visit POIs…) runs
+automatically from its assignment. The tactician is consulted only when there is
+something to react to, and returns one of:
 
-- :class:`GroqPlanner` calls a real LLM (Groq, via the shared ``groq_client``)
-  in JSON mode. This is the default path — real AI choosing tools.
-- :class:`HeuristicPlanner` is a deterministic, no-network fallback so the full
-  loop (and the tests) run without an API key. It is NOT used when a key is set.
+    {"action": "continue"}                          — stay on the baseline task
+    {"action": "investigate", "contact_id": ...}    — break off to identify
+    {"action": "report", "contact_id": ..., "classification": ..., "rationale": ...}
+
+This keeps the LLM doing the *judgement* (is this an anomaly? worth reporting?)
+while routine movement stays deterministic and grounded.
 """
 
 from __future__ import annotations
@@ -16,116 +19,76 @@ from typing import Any, Protocol
 
 from maritime_swarm.ai_control.geo import haversine_km
 from maritime_swarm.ai_control.observation import Observation
-from maritime_swarm.ai_control.prompts import build_system_prompt, build_user_prompt
-from maritime_swarm.ai_control.scene import Scene
-from maritime_swarm.ai_control.tools import ToolContext, ToolRegistry
+from maritime_swarm.ai_control.prompts import tactical_system_prompt, tactical_user_prompt
+from maritime_swarm.ai_control.tools import ToolContext
 from maritime_swarm.llm.groq_client import inferenza_json
 
 logger = logging.getLogger(__name__)
 
+_ACTIONS = {"continue", "investigate", "report"}
 
-class Planner(Protocol):
-    def decide(
-        self,
-        obs: Observation,
-        ctx: ToolContext,
-        scene: Scene,
-        mission: str,
-        registry: ToolRegistry,
+
+class TacticalPlanner(Protocol):
+    def decide_reactive(
+        self, obs: Observation, ctx: ToolContext, mission: str, brief: dict[str, Any] | None,
+        assignment_label: str, peers: list[dict[str, Any]], focus: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         ...
 
 
-def _normalise_decision(raw: dict[str, Any]) -> dict[str, Any]:
-    """Coerce an LLM response into the canonical decision shape."""
-    tool = raw.get("tool") or raw.get("name") or raw.get("action")
-    args = raw.get("args") or raw.get("arguments") or raw.get("parameters") or {}
-    if not isinstance(args, dict):
-        args = {}
-    reasoning = str(raw.get("reasoning") or raw.get("thought") or "").strip()
-    return {"reasoning": reasoning, "tool": tool, "args": args}
+def _normalise_reactive(raw: dict[str, Any]) -> dict[str, Any]:
+    action = str(raw.get("action") or raw.get("tool") or "continue").lower().strip()
+    if action not in _ACTIONS:
+        action = "continue"
+    return {
+        "action": action,
+        "contact_id": (str(raw.get("contact_id")).strip() if raw.get("contact_id") else None),
+        "classification": (str(raw.get("classification") or "").upper().strip() or None),
+        "rationale": str(raw.get("rationale") or "").strip(),
+        "reasoning": str(raw.get("reasoning") or "").strip(),
+    }
 
 
-class GroqPlanner:
-    """Real-LLM planner using the Groq OpenAI-compatible endpoint (JSON mode)."""
+class GroqTactician:
+    def __init__(self, api_key: str, model: str, temperature: float = 0.2) -> None:
+        self.api_key, self.model, self.temperature = api_key, model, temperature
 
-    def __init__(self, api_key: str, model: str, temperature: float = 0.3) -> None:
-        self.api_key = api_key
-        self.model = model
-        self.temperature = temperature
-
-    def decide(
-        self,
-        obs: Observation,
-        ctx: ToolContext,
-        scene: Scene,
-        mission: str,
-        registry: ToolRegistry,
-    ) -> dict[str, Any]:
-        system_prompt = build_system_prompt(registry)
-        user_prompt = build_user_prompt(obs, ctx, scene, mission)
+    def decide_reactive(self, obs, ctx, mission, brief, assignment_label, peers, focus=None):
         raw = inferenza_json(
-            prompt=user_prompt,
+            prompt=tactical_user_prompt(obs, ctx, mission, brief, assignment_label, peers, focus),
             api_key=self.api_key,
-            system_prompt=system_prompt,
+            system_prompt=tactical_system_prompt(),
             model=self.model,
             temperature=self.temperature,
         )
-        return _normalise_decision(raw)
+        return _normalise_reactive(raw)
 
 
-class HeuristicPlanner:
-    """Deterministic fallback planner (no LLM): investigate, else patrol.
+class HeuristicTactician:
+    """No-LLM reactions: investigate a suspicious contact, report once close."""
 
-    Used only when no API key is configured, so the simulation still moves and
-    the loop can be exercised offline / in tests.
-    """
-
-    def __init__(self) -> None:
-        self._patrol_idx: dict[str, int] = {}
-
-    def decide(
-        self,
-        obs: Observation,
-        ctx: ToolContext,
-        scene: Scene,
-        mission: str,
-        registry: ToolRegistry,
-    ) -> dict[str, Any]:
-        # 1) Investigate the nearest suspicious contact, if any.
+    def decide_reactive(self, obs, ctx, mission, brief, assignment_label, peers, focus=None):
+        if focus and focus.get("id"):
+            # A contact we just identified — report it if it looked suspicious.
+            if focus.get("flagged") or str(focus.get("label", "")).upper() == "UNKNOWN":
+                return _normalise_reactive({
+                    "action": "report", "contact_id": focus["id"], "classification": "ANOMALY",
+                    "rationale": "Identified contact does not match a commercial AIS pattern.",
+                    "reasoning": f"Identified {focus['id']}; reporting as anomaly.",
+                })
+            return _normalise_reactive({"action": "continue"})
         suspicious = [c for c in obs.contacts if c.is_suspicious]
-        if suspicious:
-            nearest = min(suspicious, key=lambda c: haversine_km(obs.lat, obs.lon, c.lat, c.lon))
-            return {
-                "reasoning": f"Suspicious {nearest.label} contact {nearest.id} in range; closing to identify.",
-                "tool": "investigate_contact",
-                "args": {"contact_id": nearest.id},
-            }
-
-        # 2) Otherwise patrol toward the next point of interest / area corner.
-        waypoints = self._patrol_waypoints(scene)
-        idx = self._patrol_idx.get(ctx.agent_id, _seed_index(ctx.agent_id, len(waypoints)))
-        lat, lon = waypoints[idx % len(waypoints)]
-        self._patrol_idx[ctx.agent_id] = idx + 1
-        return {
-            "reasoning": "No contacts of interest; patrolling toward the next coverage waypoint.",
-            "tool": "go_to",
-            "args": {"lat": lat, "lon": lon},
-        }
-
-    @staticmethod
-    def _patrol_waypoints(scene: Scene) -> list[tuple[float, float]]:
-        if scene.pois:
-            return [(p.lat, p.lon) for p in scene.pois]
-        b = scene.bounds
-        return [
-            (b.lat_min, b.lon_min),
-            (b.lat_max, b.lon_min),
-            (b.lat_max, b.lon_max),
-            (b.lat_min, b.lon_max),
-        ]
-
-
-def _seed_index(agent_id: str, n: int) -> int:
-    """Stable per-agent starting offset so the three assets spread out."""
-    return (sum(ord(ch) for ch in agent_id)) % max(1, n)
+        if not suspicious:
+            return _normalise_reactive({"action": "continue"})
+        nearest = min(suspicious, key=lambda c: haversine_km(obs.lat, obs.lon, c.lat, c.lon))
+        dist = haversine_km(obs.lat, obs.lon, nearest.lat, nearest.lon)
+        if dist <= max(0.6, ctx.arrival_km * 2):
+            return _normalise_reactive({
+                "action": "report", "contact_id": nearest.id, "classification": "ANOMALY",
+                "rationale": f"{nearest.label} contact with no commercial AIS match at close range.",
+                "reasoning": f"Closed on {nearest.id}; assessing as anomaly and reporting.",
+            })
+        return _normalise_reactive({
+            "action": "investigate", "contact_id": nearest.id,
+            "reasoning": f"Suspicious {nearest.label} contact {nearest.id} in range; closing to identify.",
+        })

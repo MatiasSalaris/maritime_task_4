@@ -1,9 +1,19 @@
-"""The per-agent decision/execution loop.
+"""The per-agent decision/execution loop — now coordinated and grounded.
 
-Receives observations from the world model (~10 Hz), asks the planner which
-tool to run when idle (or when a new contact appears), and executes the active
-tool tick-by-tick by sending actions back. The planner call (a possibly slow
-LLM request) runs in a background thread/task so steering stays responsive.
+Each agent:
+  • receives observations (~10 Hz) and ingests peer messages into its own
+    SwarmView (shared situational picture), built only from the P2P bus;
+  • broadcasts its status periodically so peers know it and the contacts it sees;
+  • participates in an emergent negotiation — the lowest-id live asset acts as
+    leader, interprets the mission and broadcasts a proposed allocation; peers
+    adopt and acknowledge. A deterministic de-confliction runs locally in every
+    agent as a convergence backstop (no central authority);
+  • runs its assigned baseline task (patrol sector / escort / visit POIs …)
+    deterministically, and consults the tactician LLM only to *react* to sensed
+    contacts (investigate / report).
+
+There is no central planner: strategy is proposed by a peer and can be taken
+over by another peer if the leader goes silent.
 """
 
 from __future__ import annotations
@@ -13,150 +23,360 @@ import logging
 import time
 from typing import Any
 
-from maritime_swarm.ai_control.observation import Observation
-from maritime_swarm.ai_control.planner import Planner
-from maritime_swarm.ai_control.scene import Scene
-from maritime_swarm.ai_control.tools import (
-    Tool,
-    ToolContext,
-    ToolError,
-    ToolRegistry,
-    ToolStatus,
+from maritime_swarm.ai_control.blackboard import PeerInfo, SwarmView
+from maritime_swarm.ai_control.coordination import (
+    assignment_label,
+    default_allocation,
+    deconflict,
 )
+from maritime_swarm.ai_control.observation import Observation
+from maritime_swarm.ai_control.planner import TacticalPlanner
+from maritime_swarm.ai_control.scene import Scene
+from maritime_swarm.ai_control.strategist import HeuristicStrategist, Strategist
+from maritime_swarm.ai_control.tools import Tool, ToolContext, ToolError, ToolRegistry
 from maritime_swarm.ai_control.world_client import WorldModelClient
 
 logger = logging.getLogger(__name__)
 
+STATUS_INTERVAL_S = 4.0       # world-time between status broadcasts
+NEGOTIATION_GRACE_S = 3.0     # wait this long (world time) before leading, so peers are known
+REACTIVE_INTERVAL_S = 4.0     # min wall-clock between tactician LLM calls
+
 
 class AgentBrain:
-    """Drives one world-model agent with LLM-selected tools."""
-
     def __init__(
         self,
         client: WorldModelClient,
         ctx: ToolContext,
-        planner: Planner,
+        strategist: Strategist,
+        tactician: TacticalPlanner,
         scene: Scene,
-        mission: str,
+        mission: str | None,
         registry: ToolRegistry,
-        min_think_interval: float = 4.0,
     ) -> None:
         self.client = client
         self.ctx = ctx
-        self.planner = planner
+        self.strategist = strategist
+        self.tactician = tactician
         self.scene = scene
-        self.mission = mission
+        self.mission = (mission or "").strip() or None
         self.registry = registry
-        self.min_think_interval = min_think_interval
 
-        self.active_tool: Tool | None = None
-        self._thinking = False
-        self._last_think = 0.0
-        self._seen_contacts: set[str] = set()
-        self._mission_changed = False
+        self.view = SwarmView(ctx.agent_id)
+        self.brief: dict[str, Any] | None = None
+        self.assignment: dict[str, Any] | None = None
+        self._assignment_label = "UNASSIGNED"
+        self.baseline_tool: Tool | None = None
+        self.reactive_tool: Tool | None = None
 
+        self._t0: float | None = None
+        self._last_status_t = -1e9
+        self._current_task: str | None = None
+        self._negotiated_for: str | None = None
+        self._planned_roster: set[str] = set()
+        self._thinking_strategy = False
+        self._thinking_reactive = False
+        self._last_reactive_think = 0.0
+        self._reported: set[str] = set()
+        self._pending_report: dict[str, Any] | None = None   # a just-identified contact
+
+    # ── main loop ──────────────────────────────────────────────────────────
     async def run(self) -> None:
         await self.client.connect()
-        await self.client.send_cot(f"{self.ctx.agent_name} online — awaiting first decision.\n")
+        await self.client.send_cot(f"{self.ctx.agent_name} online.\n")
         try:
             while True:
                 msg = await self.client.recv()
                 if msg.get("type") != "observation":
                     continue
-                obs = Observation.from_payload(msg["payload"])
-                await self._on_observation(obs)
+                await self._on_observation(Observation.from_payload(msg["payload"]))
         except asyncio.CancelledError:
             raise
-        except Exception as exc:  # connection dropped, etc.
+        except Exception as exc:
             logger.warning("[%s] loop ended: %s", self.ctx.agent_id, exc)
         finally:
             await self.client.close()
 
     async def _on_observation(self, obs: Observation) -> None:
-        # Live mission updates: the operator can set, change, or clear the
-        # mission in the frontend at any time.
+        if self._t0 is None:
+            self._t0 = obs.world_time
+        self.ctx.obs = obs
+        self.ctx.view = self.view
+        self.ctx.scene = self.scene
+        self.view.tick(obs.world_time)
+
+        # 1) ingest peer messages + our own sightings into the shared picture
+        for m in obs.inbox:
+            self.view.ingest(m.get("from_agent", ""), m.get("msg_type", ""), m.get("content", {}) or {})
+        self.view.observe(obs.contacts)
+
+        # 2) mission set / change / clear
+        if not self._handle_mission(obs):
+            return  # mission cleared → idling
+
+        # 3) broadcast our status (peer awareness + shared contacts)
+        await self._maybe_broadcast_status(obs)
+
+        # 4) emergent negotiation (leader proposes; peers adopt)
+        self._maybe_negotiate(obs)
+
+        # 5) adopt our assignment (with local de-confliction backstop)
+        await self._refresh_assignment(obs)
+
+        # 6) react to sensed contacts (tactician LLM)
+        self._maybe_react(obs)
+
+        # 7) execute the active tool
+        await self._execute(obs)
+
+    # ── mission ──────────────────────────────────────────────────────────────
+    def _handle_mission(self, obs: Observation) -> bool:
         incoming = (obs.mission or "").strip()
         if incoming != (self.mission or ""):
-            self.active_tool = None  # abandon the current plan
             if incoming:
-                # New / changed mission → force an immediate replan.
                 self.mission = incoming
-                self._mission_changed = True
+                self.brief = None
+                self.assignment = None
+                self.baseline_tool = None
+                self.reactive_tool = None
+                self._negotiated_for = None
+                self._reported.clear()
                 logger.info("[%s] new mission: %s", self.ctx.agent_id, incoming)
                 asyncio.create_task(self.client.send_cot(f"New mission — re-planning: {incoming}\n"))
             else:
-                # Mission cleared (operator pressed Reset) → stop and idle.
                 self.mission = None
-                self._mission_changed = False
-                logger.info("[%s] mission cleared — holding station.", self.ctx.agent_id)
+                self.assignment = None
+                self.baseline_tool = None
+                self.reactive_tool = None
+                self.view.allocation = {}
+                logger.info("[%s] mission cleared — holding.", self.ctx.agent_id)
                 asyncio.create_task(self.client.send_cot("Mission cleared — holding station.\n"))
-                asyncio.create_task(
-                    self.client.send_action({"speed_kn": 0.0, "planned_path": [], "current_task": "Idle — awaiting orders"})
-                )
+                asyncio.create_task(self.client.send_action(
+                    {"speed_kn": 0.0, "planned_path": [], "current_task": "Idle — awaiting orders"}))
+        return self.mission is not None
 
-        # Track newly-appeared contacts; a fresh suspicious contact justifies
-        # interrupting the current plan to reconsider.
-        new_ids = {c.id for c in obs.contacts} - self._seen_contacts
-        self._seen_contacts |= {c.id for c in obs.contacts}
-        new_suspicious = any(c.id in new_ids and c.is_suspicious for c in obs.contacts)
-        already_investigating = (
-            self.active_tool is not None and self.active_tool.name == "investigate_contact"
-        )
-        # A mission change forces a replan immediately, bypassing the rate limit.
-        force = self._mission_changed
-        interrupt = force or (new_suspicious and not already_investigating)
+    # ── status broadcast ───────────────────────────────────────────────────
+    async def _maybe_broadcast_status(self, obs: Observation) -> None:
+        if (obs.world_time - self._last_status_t) < STATUS_INTERVAL_S:
+            return
+        self._last_status_t = obs.world_time
+        content = {
+            "name": self.ctx.agent_name,
+            "type": self.ctx.agent_type,
+            "pos": {"lat": obs.lat, "lon": obs.lon},
+            "heading": obs.heading,
+            "speed_kn": obs.speed_kn,
+            "task": self._current_task,
+            "assignment": self.assignment,
+            "contacts": [
+                {"id": c.id, "lat": c.lat, "lon": c.lon, "label": c.label, "flagged": c.flagged}
+                for c in obs.contacts
+            ],
+        }
+        await self.client.send_p2p("all", "status", content)
 
-        # Decide whether to (re)plan.
-        idle = self.active_tool is None
-        now = time.monotonic()
-        rate_ok = force or (now - self._last_think) >= self.min_think_interval
-        # Only plan while there is an active mission; with none, the agent idles.
-        if self.mission and (idle or interrupt) and not self._thinking and rate_ok:
-            self._mission_changed = False
-            self._thinking = True
-            asyncio.create_task(self._think(obs))
+    # ── negotiation ────────────────────────────────────────────────────────
+    def _members(self, obs: Observation) -> list[dict[str, Any]]:
+        members = [{
+            "id": self.ctx.agent_id, "name": self.ctx.agent_name,
+            "type": self.ctx.agent_type, "lat": obs.lat, "lon": obs.lon, "is_self": True,
+        }]
+        for pid in self.view.live_peer_ids():
+            p = self.view.peers[pid]
+            members.append({"id": pid, "name": p.name or pid, "type": p.agent_type or "?",
+                            "lat": p.lat, "lon": p.lon})
+        return members
 
-        # Execute the active tool.
-        if self.active_tool is not None:
-            inv = self.active_tool.step(obs, self.ctx)
-            if inv.action is not None:
-                await self.client.send_action(inv.action)
-            if inv.finished:
-                logger.info(
-                    "[%s] %s -> %s (%s)",
-                    self.ctx.agent_id,
-                    self.active_tool.describe(),
-                    inv.status.value,
-                    inv.note,
-                )
-                self.active_tool = None
+    def _is_leader(self) -> bool:
+        live = self.view.live_member_ids()
+        return bool(live) and live[0] == self.ctx.agent_id
 
-    async def _think(self, obs: Observation) -> None:
+    def _maybe_negotiate(self, obs: Observation) -> None:
+        if self._thinking_strategy or self._t0 is None:
+            return
+        grace_passed = (obs.world_time - self._t0) >= NEGOTIATION_GRACE_S
+        if not grace_passed:
+            return
+        if not self._is_leader():
+            return
+        roster = set(self.view.live_member_ids())
+        need = (self._negotiated_for != self.mission) or (roster != self._planned_roster)
+        if not need:
+            return
+        self._thinking_strategy = True
+        self._negotiated_for = self.mission
+        self._planned_roster = roster
+        asyncio.create_task(self._run_strategy(obs))
+
+    async def _run_strategy(self, obs: Observation) -> None:
         try:
-            decision = await asyncio.to_thread(
-                self.planner.decide, obs, self.ctx, self.scene, self.mission, self.registry
-            )
-            tool = self.registry.build(decision.get("tool"), decision.get("args"), self.ctx)
-            reasoning = decision.get("reasoning") or ""
-            self.active_tool = tool
-            logger.info("[%s] decision: %s | %s", self.ctx.agent_id, tool.describe(), reasoning)
-            thought = reasoning.strip() or f"Executing {tool.describe()}."
-            await self.client.send_cot(thought + "\n")
-        except ToolError as exc:
-            logger.warning("[%s] invalid tool call: %s", self.ctx.agent_id, exc)
-            self._fallback()
-            await self.client.send_cot(f"Invalid tool call ({exc}); falling back to patrol.\n")
-        except Exception as exc:  # LLM/network error
-            logger.warning("[%s] planner error: %s", self.ctx.agent_id, exc)
-            self._fallback()
+            members = self._members(obs)
+            contacts = self._known_contacts(obs)
+            plan = await asyncio.to_thread(
+                self.strategist.plan, self.mission, members, self.scene, contacts)
+            self.brief = plan["brief"]
+            self.view.brief = plan["brief"]
+            self.view.allocation = plan["allocation"]
+            self.view.last_proposal_t = obs.world_time
+            await self.client.send_p2p(
+                "all", "proposal",
+                {"brief": plan["brief"], "allocation": plan["allocation"]},
+                reasoning=plan.get("reasoning") or "Proposed task division.")
+            await self.client.send_cot(f"Plan: {plan.get('reasoning') or 'task division proposed'}\n")
+            logger.info("[%s] (leader) proposed allocation: %s", self.ctx.agent_id,
+                        {k: assignment_label(v) for k, v in plan["allocation"].items()})
+        except Exception as exc:
+            logger.warning("[%s] strategy failed (%s); using default sectors", self.ctx.agent_id, exc)
+            self.view.allocation = default_allocation(self.view.live_member_ids(), self.scene.bounds)
         finally:
-            self._last_think = time.monotonic()
-            self._thinking = False
+            self._thinking_strategy = False
 
-    def _fallback(self) -> None:
-        """When planning fails, head to the area centre so the asset keeps moving."""
-        clat, clon = self.scene.bounds.center()
+    def _known_contacts(self, obs: Observation) -> list[dict[str, Any]]:
+        out = {c.id: {"id": c.id, "label": c.label, "flagged": c.flagged} for c in obs.contacts}
+        for cid, sc in self.view.contacts.items():
+            out.setdefault(cid, {"id": cid, "label": sc.label, "flagged": sc.flagged})
+        return list(out.values())
+
+    # ── assignment adoption ──────────────────────────────────────────────────
+    async def _refresh_assignment(self, obs: Observation) -> None:
+        positions = {self.ctx.agent_id: (obs.lat, obs.lon)}
+        for pid in self.view.live_peer_ids():
+            p = self.view.peers[pid]
+            positions[pid] = (p.lat, p.lon)
+        member_ids = self.view.live_member_ids()
+
+        # Provisional deterministic split until a proposal lands → instant, non-erratic start.
+        allocation = self.view.allocation or default_allocation(member_ids, self.scene.bounds)
+        allocation = deconflict(allocation, member_ids, positions, self.scene.bounds)
+        new_assignment = allocation.get(self.ctx.agent_id)
+
+        if new_assignment != self.assignment:
+            had_proposal = self.view.brief is not None
+            self.assignment = new_assignment
+            self._assignment_label = assignment_label(new_assignment)
+            # Rebuild only the baseline; an in-progress reaction (investigate /
+            # report) is independent of the patrol assignment and must persist.
+            self.baseline_tool = self._build_baseline(new_assignment, obs)
+            await self.client.send_cot(f"Assignment: {self._assignment_label}\n")
+            # Acknowledge the leader's proposal (visible coordination), unless we are leader.
+            if had_proposal and not self._is_leader():
+                await self.client.send_p2p(
+                    "all", "ack", {"assignment": new_assignment},
+                    reasoning=f"Acknowledged — taking {self._assignment_label}.")
+
+    def _build_baseline(self, assignment: dict[str, Any] | None, obs: Observation) -> Tool | None:
+        if not assignment:
+            return None
+        kind = (assignment.get("kind") or "").lower()
+        spec: tuple[str, dict[str, Any]] | None = None
+        if kind == "patrol_sector":
+            spec = ("patrol_sector", {"sector": assignment.get("sector", "CENTER")})
+        elif kind == "investigate":
+            spec = ("investigate_contact", {"contact_id": assignment.get("contact_id")})
+        elif kind == "escort":
+            spec = ("escort_contact", {"contact_id": assignment.get("contact_id"),
+                                       "standoff_m": assignment.get("standoff_m", 500),
+                                       "bearing_deg": assignment.get("bearing_deg", 0)})
+        elif kind == "visit_pois":
+            spec = ("visit_pois", {"poi_ids": assignment.get("poi_ids", []),
+                                   "rendezvous": assignment.get("rendezvous")})
+        elif kind == "rendezvous":
+            spec = ("rendezvous", {"poi_id": assignment.get("poi_id") or assignment.get("point")})
+        elif kind == "hold":
+            spec = ("hold_position", {"seconds": 60})
         try:
-            self.active_tool = self.registry.build("go_to", {"lat": clat, "lon": clon}, self.ctx)
+            if spec is not None:
+                return self.registry.build(spec[0], spec[1], self.ctx)
+        except ToolError as exc:
+            logger.info("[%s] baseline build failed (%s); patrolling instead", self.ctx.agent_id, exc)
+        # fallback: patrol the nearest sector so we still move sensibly
+        return self._fallback_patrol(obs)
+
+    def _fallback_patrol(self, obs: Observation) -> Tool | None:
+        from maritime_swarm.ai_control.coordination import SECTORS, sector_center
+        from maritime_swarm.ai_control.geo import haversine_km
+        best = min(SECTORS, key=lambda s: haversine_km(obs.lat, obs.lon, *sector_center(self.scene.bounds, s)))
+        try:
+            return self.registry.build("patrol_sector", {"sector": best}, self.ctx)
         except ToolError:
-            self.active_tool = None
+            return None
+
+    # ── reactive (tactician) ─────────────────────────────────────────────────
+    def _already_reported(self, contact_id: str) -> bool:
+        if contact_id in self._reported:
+            return True
+        sc = self.view.contacts.get(contact_id)
+        return bool(sc and sc.reported)
+
+    def _unreported_suspicious(self, obs: Observation) -> bool:
+        return any(c.is_suspicious and not self._already_reported(c.id) for c in obs.contacts)
+
+    def _maybe_react(self, obs: Observation) -> None:
+        if self.reactive_tool is not None or self._thinking_reactive:
+            return
+        pending = self._pending_report is not None
+        # Don't keep reacting to contacts the team has already reported.
+        if not pending and not self._unreported_suspicious(obs):
+            return
+        now = time.monotonic()
+        if not pending and (now - self._last_reactive_think) < REACTIVE_INTERVAL_S:
+            return
+        self._thinking_reactive = True
+        asyncio.create_task(self._run_reactive(obs))
+
+    async def _run_reactive(self, obs: Observation) -> None:
+        focus = self._pending_report
+        self._pending_report = None
+        try:
+            peers = [{"id": pid, "assignment_label": assignment_label(self.view.peers[pid].assignment)}
+                     for pid in self.view.live_peer_ids()]
+            d = await asyncio.to_thread(
+                self.tactician.decide_reactive, obs, self.ctx, self.mission, self.brief,
+                self._assignment_label, peers, focus)
+            action = d.get("action")
+            cid = d.get("contact_id")
+            if action == "investigate" and cid:
+                self.reactive_tool = self.registry.build("investigate_contact", {"contact_id": cid}, self.ctx)
+                await self.client.send_cot((d.get("reasoning") or f"Investigating {cid}") + "\n")
+            elif action == "report" and cid and cid not in self._reported:
+                self.reactive_tool = self.registry.build(
+                    "report_contact",
+                    {"contact_id": cid, "classification": d.get("classification") or "SUSPICIOUS",
+                     "rationale": d.get("rationale") or ""},
+                    self.ctx)
+                self._reported.add(cid)
+                await self.client.send_cot((d.get("reasoning") or f"Reporting {cid}") + "\n")
+            # else: continue on baseline
+        except ToolError as exc:
+            logger.info("[%s] reactive build rejected (%s)", self.ctx.agent_id, exc)
+        except Exception as exc:
+            logger.warning("[%s] tactician error: %s", self.ctx.agent_id, exc)
+        finally:
+            self._last_reactive_think = time.monotonic()
+            self._thinking_reactive = False
+
+    # ── execution ──────────────────────────────────────────────────────────
+    async def _execute(self, obs: Observation) -> None:
+        active = self.reactive_tool or self.baseline_tool
+        if active is None:
+            return
+        inv = active.step(obs, self.ctx)
+        if inv.action is not None:
+            self._current_task = inv.action.get("current_task", self._current_task)
+            await self.client.send_action(inv.action)
+        if inv.p2p is not None:
+            self.view.ingest(self.ctx.agent_id, inv.p2p.get("msg_type", "status"), inv.p2p.get("content", {}))
+            await self.client.send_p2p(
+                inv.p2p.get("to", "all"), inv.p2p.get("msg_type", "status"),
+                inv.p2p.get("content", {}), reasoning=inv.p2p.get("reasoning"))
+        if inv.finished:
+            if active is self.reactive_tool:
+                # Finished investigating a contact → queue a focused "report it?" decision.
+                if active.name == "investigate_contact" and inv.status.value == "done":
+                    cid = getattr(active, "contact_id", None)
+                    sc = self.view.contacts.get(cid) if cid else None
+                    if sc is not None and not self._already_reported(cid):
+                        self._pending_report = {"id": cid, "label": sc.label, "flagged": sc.flagged}
+                self.reactive_tool = None  # resume the baseline task
+            else:
+                self.baseline_tool = self._build_baseline(self.assignment, obs) if self.assignment else None

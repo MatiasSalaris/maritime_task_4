@@ -10,6 +10,7 @@ class MessageType(str, Enum):
     OBJECTION = "objection"
     HANDOFF = "handoff"
     STATUS = "status"
+    REPORT = "report"
 
 
 class P2PMessage(BaseModel):
