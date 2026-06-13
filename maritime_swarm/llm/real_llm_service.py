@@ -1,11 +1,12 @@
-"""Async adapter around the real LLM utilities in swarm.llm_utils."""
+"""Async adapter around the maritime swarm LLM utilities."""
 
 from __future__ import annotations
 
 import asyncio
 from typing import Any
 
-from swarm import llm_utils
+from maritime_swarm.llm.groq_client import inferenza, inferenza_json
+from maritime_swarm.llm.system_prompts import SYSTEM_PROMPT_LEAD, SYSTEM_PROMPT_TRACE
 
 
 class LLMService:
@@ -18,10 +19,10 @@ class LLMService:
     async def parse_mission(self, mission: str) -> dict[str, Any]:
         """Return a structured briefing from natural-language mission text."""
         briefing = await asyncio.to_thread(
-            llm_utils.inferenza_json,
+            inferenza_json,
             prompt=mission,
             api_key=self.api_key,
-            system_prompt=llm_utils.SYSTEM_PROMPT_LEAD,
+            system_prompt=SYSTEM_PROMPT_LEAD,
             model=self.model,
             temperature=0.1,
         )
@@ -36,10 +37,10 @@ class LLMService:
     async def decision_trace(self, prompt: str) -> str:
         """Return a concise human-readable trace for an already-made decision."""
         return await asyncio.to_thread(
-            llm_utils.inferenza,
+            inferenza,
             prompt=prompt,
             api_key=self.api_key,
-            system_prompt=llm_utils.SYSTEM_PROMPT_TRACE,
+            system_prompt=SYSTEM_PROMPT_TRACE,
             model=self.model,
             temperature=0.2,
         )
@@ -51,7 +52,7 @@ class LLMService:
             f"Briefing: {briefing}"
         )
         return await asyncio.to_thread(
-            llm_utils.inferenza,
+            inferenza,
             prompt=prompt,
             api_key=self.api_key,
             system_prompt="Return one concise sentence only.",

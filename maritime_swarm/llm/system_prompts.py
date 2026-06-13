@@ -1,4 +1,4 @@
-"""Prompt templates used by the maritime swarm LLM adapter."""
+"""System prompts used by the maritime swarm LLM adapter."""
 
 SYSTEM_PROMPT_LEAD = """\
 You are the entry agent of a decentralised maritime swarm. Convert the human
