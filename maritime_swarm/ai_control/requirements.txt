@@ -1,0 +1,3 @@
+# AI control layer dependencies (separate from the world model backend).
+requests>=2.31
+websockets>=12.0
