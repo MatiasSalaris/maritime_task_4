@@ -172,23 +172,26 @@ class SimulatedPlatformProvider(AbstractPlatformProvider):
                 agent.cot_text = ""
 
     async def reset(self) -> None:
+        # Restart from scratch: return every agent to its spawn pose and stop it,
+        # while preserving identity and any live WS connection. Contacts and
+        # mission state are rebuilt fresh so a new simulation starts clean.
+        spawn = {a.id: a for a in self._init_agents()}
         for agent in self.agents:
+            base = spawn.get(agent.id)
+            if base is not None:
+                agent.position = Position(lat=base.position.lat, lon=base.position.lon)
+                agent.heading = base.heading
+            agent.speed_kn = 0.0          # stop physics until new orders arrive
+            agent.status = AgentStatus.OPERATIONAL
             agent.path_history = []
             agent.planned_path = []
             agent.cot_text = ''
             agent.current_task = None
-            agent.speed_kn = 0.0   # stop physics so DemoRunner's warp_to is the only driver
+        self.contacts = initial_contacts()
         self.mission = None
         self._detection_state: dict[str, str] = {}
         self._pending_events.clear()
         self._nato_counter = 0
-        for c in self.contacts:
-            c.status = ContactStatus.UNKNOWN
-            c.nato_id = None
-            c.first_seen = None
-            c.last_seen = None
-            c.last_known_position = None
-            c.detecting_agents = []
 
     async def update_agent_cot(self, agent_id: str, chunk: str) -> None:
         agent = self._agent(agent_id)

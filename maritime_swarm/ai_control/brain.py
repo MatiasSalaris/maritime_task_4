@@ -73,14 +73,26 @@ class AgentBrain:
             await self.client.close()
 
     async def _on_observation(self, obs: Observation) -> None:
-        # Live mission updates: the operator can change the mission in the
-        # frontend at any time. Adopt the new text and force an immediate replan.
+        # Live mission updates: the operator can set, change, or clear the
+        # mission in the frontend at any time.
         incoming = (obs.mission or "").strip()
-        if incoming and incoming != self.mission:
-            self.mission = incoming
-            self._mission_changed = True
-            logger.info("[%s] new mission: %s", self.ctx.agent_id, incoming)
-            asyncio.create_task(self.client.send_cot(f"New mission received — re-planning.\n{incoming}"))
+        if incoming != (self.mission or ""):
+            self.active_tool = None  # abandon the current plan
+            if incoming:
+                # New / changed mission → force an immediate replan.
+                self.mission = incoming
+                self._mission_changed = True
+                logger.info("[%s] new mission: %s", self.ctx.agent_id, incoming)
+                asyncio.create_task(self.client.send_cot(f"New mission received — re-planning.\n{incoming}"))
+            else:
+                # Mission cleared (operator pressed Reset) → stop and idle.
+                self.mission = None
+                self._mission_changed = False
+                logger.info("[%s] mission cleared — holding station.", self.ctx.agent_id)
+                asyncio.create_task(self.client.send_cot("Mission cleared — holding station."))
+                asyncio.create_task(
+                    self.client.send_action({"speed_kn": 0.0, "planned_path": [], "current_task": "Idle — awaiting orders"})
+                )
 
         # Track newly-appeared contacts; a fresh suspicious contact justifies
         # interrupting the current plan to reconsider.
@@ -98,7 +110,8 @@ class AgentBrain:
         idle = self.active_tool is None
         now = time.monotonic()
         rate_ok = force or (now - self._last_think) >= self.min_think_interval
-        if (idle or interrupt) and not self._thinking and rate_ok:
+        # Only plan while there is an active mission; with none, the agent idles.
+        if self.mission and (idle or interrupt) and not self._thinking and rate_ok:
             self._mission_changed = False
             self._thinking = True
             asyncio.create_task(self._think(obs))

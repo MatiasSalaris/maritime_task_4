@@ -38,6 +38,27 @@
     running  = false
     progress = ''
   }
+
+  // Stop everything and restart from a clean state: stop any scripted demo and
+  // reset the world model. Agents return to their spawn positions and the AI
+  // control layer idles until a new mission is issued — i.e. a fresh simulation.
+  let resetting = false
+  async function resetAll() {
+    runner?.stop()
+    runner   = null
+    running  = false
+    resetting = true
+    progress = 'Resetting…'
+    try {
+      await fetch('/api/reset', { method: 'POST' })
+      progress = 'Reset — issue a mission to start a fresh run'
+    } catch (e) {
+      progress = 'Reset failed: backend unreachable'
+    } finally {
+      resetting = false
+      setTimeout(() => (progress = ''), 3500)
+    }
+  }
 </script>
 
 <div class="demo-bar">
@@ -50,6 +71,15 @@
       ■ Stop Demo
     </button>
   {/if}
+
+  <button
+    class="btn reset"
+    on:click={resetAll}
+    disabled={resetting}
+    title="Stop everything and restart from a clean state"
+  >
+    ⟲ Reset
+  </button>
 
   {#if progress}
     <span class="progress">{progress}</span>
@@ -85,6 +115,8 @@
   .btn:hover { opacity: 0.82; }
   .start { background: #003344; color: #00d4ff; border: 1px solid #00d4ff66; }
   .stop  { background: #3a0808; color: #ff6677; border: 1px solid #ff335566; }
+  .reset { background: #2a1c00; color: #ffaa33; border: 1px solid #ffaa3366; }
+  .btn:disabled { opacity: 0.5; cursor: default; }
 
   .progress {
     font-size: 12px;
