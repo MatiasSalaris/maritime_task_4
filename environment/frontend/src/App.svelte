@@ -41,7 +41,9 @@
   $: if (ready && $worldState.agents) {
     agentLayer?.update($worldState.agents)   // sets interpolation targets
     pathLayer?.update($worldState.agents)    // caches history / planned coords
-    contactLayer?.update($worldState.contacts ?? [], $worldState.agents ?? [], $godView, $worldState.time)
+    // Cache contacts; detection + reveal happen at 60 fps in renderFrame, using
+    // the interpolated agent positions (consistent with the drawn sensor rings).
+    contactLayer?.update($worldState.contacts ?? [], $godView, $worldState.time)
   }
 
   // Detect a world reset (path history collapses to empty) → wipe track memory
@@ -129,14 +131,15 @@
 
     const map = mapMgr.map
 
-    // Base map layers. PathLayer draws the fading sensor swath + track;
-    // the swath width is driven by agent type (UAV wide camera / USV radar).
+    // Base map layers. Order matters: the operating-area mask is added FIRST so
+    // it sits *below* the tracks and contacts — otherwise its dark fill would
+    // dim/occlude contacts that are inside or outside a drawn area.
+    areaLayer    = new OperatingAreaLayer(map)
     pathLayer    = new PathLayer(map, AGENT_IDS, AGENT_TYPES)
     contactLayer = new ContactLayer(map)
-    areaLayer    = new OperatingAreaLayer(map)
+    areaLayer.init()
     pathLayer.init()
     contactLayer.init()
-    areaLayer.init()
 
     // Live sensor footprint rings (computed client-side from agent positions)
     sensorLayer = new SensorLayer(map, AGENT_IDS)
@@ -153,6 +156,9 @@
     agentLayer.onFrame(disp => {
       pathLayer?.renderFrame(disp)
       sensorLayer?.renderFrame(disp)
+      // Detect/reveal contacts from the SAME interpolated positions the sensor
+      // rings are drawn at, so "inside a ring" and "shown" always agree.
+      contactLayer?.renderFrame(disp)
     })
 
     // Area selector — emits geometry when drawing completes

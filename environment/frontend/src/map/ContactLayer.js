@@ -54,6 +54,10 @@ export class ContactLayer {
     // client-side track memory: id → { natoId, firstSeen, lastSeen, lastPos }
     this._tracks     = new Map()
     this._natoCount  = 0
+    // cached at data rate; consumed at 60 fps in renderFrame()
+    this._contacts   = []
+    this._godView    = false
+    this._worldTime  = 0
   }
 
   setAnimCanvas(c) { this._animCanvas = c }
@@ -233,24 +237,30 @@ export class ContactLayer {
     return `UNK-${n}`
   }
 
+  /** Cache the latest data-rate snapshot; detection happens in renderFrame(). */
+  update(contacts, godView, worldTime) {
+    this._contacts  = contacts ?? []
+    this._godView   = godView
+    this._worldTime = worldTime ?? (Date.now() / 1000)
+  }
+
   /**
-   * Client-side detection: a contact is ACTIVE if within any agent's sensor range.
-   * @param {Contact[]} contacts
-   * @param {AgentState[]} agents
-   * @param {boolean} godView
-   * @param {number} worldTime  - server clock (seconds)
+   * Detect + reveal contacts at the interpolated agent positions (~60 fps), so
+   * a contact is shown exactly when it falls inside a drawn sensor ring.
+   * @param {Object} disp - {id: {lon, lat, range}} interpolated agent positions
    */
-  update(contacts, agents, godView, worldTime) {
-    const now = worldTime ?? (Date.now() / 1000)
+  renderFrame(disp) {
+    const now    = this._worldTime
+    const godView = this._godView
+    const agents = Object.values(disp ?? {})
 
     const active = []
     const ghost  = []
     const god    = []
 
-    for (const c of contacts) {
-      const detected = (agents ?? []).some(a =>
-        haversineKm(a.position.lat, a.position.lon, c.position.lat, c.position.lon)
-          <= (a.sensor_range_km ?? 4.0)
+    for (const c of this._contacts) {
+      const detected = agents.some(a =>
+        haversineKm(a.lat, a.lon, c.position.lat, c.position.lon) <= (a.range ?? 4.0)
       )
 
       let track = this._tracks.get(c.id)
