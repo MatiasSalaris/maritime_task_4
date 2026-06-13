@@ -1,0 +1,10 @@
+# Dev backend image — source is volume-mounted; --reload watches for changes
+FROM python:3.11-slim
+
+WORKDIR /app
+
+COPY backend/requirements.txt .
+RUN pip install --no-cache-dir -r requirements.txt
+
+# Source code is mounted at runtime, not baked in
+CMD ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8000", "--reload"]
