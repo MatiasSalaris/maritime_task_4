@@ -81,6 +81,8 @@ def assignment_label(a: dict[str, Any] | None) -> str:
         return f"VISIT {seq}" + (f" ⇒ {rdv}" if rdv else "")
     if kind == "rendezvous":
         return f"RENDEZVOUS {a.get('poi_id') or a.get('point') or ''}".strip()
+    if kind == "go_to":
+        return f"PROCEED {a.get('lat', 0):.3f},{a.get('lon', 0):.3f}"
     if kind == "hold":
         return "HOLD"
     return kind.upper() or "UNASSIGNED"

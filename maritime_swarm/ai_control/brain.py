@@ -30,7 +30,7 @@ from maritime_swarm.ai_control.coordination import (
     default_allocation,
     deconflict,
 )
-from maritime_swarm.ai_control.geo import haversine_km
+from maritime_swarm.ai_control.geo import destination, haversine_km
 from maritime_swarm.ai_control.observation import Observation
 from maritime_swarm.ai_control.planner import TacticalPlanner
 from maritime_swarm.ai_control.scene import Scene
@@ -44,9 +44,17 @@ STATUS_INTERVAL_S = 4.0       # world-time between status broadcasts
 NEGOTIATION_GRACE_S = 3.0     # wait this long (world time) before leading, so peers are known
 REACTIVE_INTERVAL_S = 4.0     # min wall-clock between tactician LLM calls
 _FOLLOW_WORDS = ("follow", "shadow", "escort", "track", "tail", "trail")
-# Missions where the WHOLE team should converge on a discovered target.
-_CONVERGE_WORDS = ("everybody", "every asset", "all assets", "all units", "all of you",
-                   "whole team", "converge", "intercept", "rendezvous")
+# Missions that direct the team onto a discovered TARGET. These must be about
+# intercepting/converging on a contact — NOT generic team orders like
+# "everybody head south" (which has nothing to do with a target).
+_CONVERGE_WORDS = ("converge", "intercept", "rendezvous with", "close on", "all intercept")
+# Directional team orders: a movement verb + a compass direction.
+_MOVE_VERBS = ("go", "head", "move", "proceed", "turn", "sail", "transit", "steer", "advance", "reposition")
+_DIRECTIONS = {
+    "north": 0, "northeast": 45, "north-east": 45, "east": 90, "southeast": 135, "south-east": 135,
+    "south": 180, "southwest": 225, "south-west": 225, "west": 270, "northwest": 315, "north-west": 315,
+}
+_CARDINAL = {0: "north", 45: "NE", 90: "east", 135: "SE", 180: "south", 225: "SW", 270: "west", 315: "NW"}
 
 
 class AgentBrain:
@@ -218,6 +226,21 @@ class AgentBrain:
     def _is_converge_mission(self) -> bool:
         return any(w in (self.mission or "").lower() for w in _CONVERGE_WORDS)
 
+    def _directional_order(self) -> tuple[float, float] | None:
+        """Parse a 'go/head <dist> <direction>' team order → (bearing_deg, dist_km)."""
+        t = (self.mission or "").lower()
+        if not any(re.search(r"\b" + v + r"\b", t) for v in _MOVE_VERBS):
+            return None
+        bearing = None
+        for name in sorted(_DIRECTIONS, key=len, reverse=True):
+            if re.search(r"\b" + re.escape(name) + r"\b", t):
+                bearing = _DIRECTIONS[name]
+                break
+        if bearing is None:
+            return None
+        dm = re.search(r"(\d+(?:\.\d+)?)\s*km", t)
+        return (float(bearing), float(dm.group(1)) if dm else 5.0)
+
     def _known_target_ids(self) -> frozenset[str]:
         """Suspicious (flagged / UNKNOWN) contacts in the shared picture."""
         return frozenset(
@@ -264,8 +287,33 @@ class AgentBrain:
 
     async def _run_strategy(self, obs: Observation) -> None:
         try:
-            engaged = self._engaged_map()
             members = self._members(obs)
+
+            # Directional team order ('everybody go 5 km south') → send every asset
+            # to a computed waypoint. Deterministic, overrides any engagement.
+            direction = self._directional_order()
+            if direction is not None:
+                bearing, dist = direction
+                allocation: dict[str, dict[str, Any]] = {}
+                for m in members:
+                    dlat, dlon = destination(m["lat"], m["lon"], bearing, dist)
+                    if self.scene.bounds:
+                        dlat, dlon = self.scene.bounds.clamp_point(dlat, dlon)
+                    allocation[m["id"]] = {"kind": "go_to", "lat": dlat, "lon": dlon}
+                brief = {"objective": self.mission, "constraints": [], "priority": None}
+                self.brief = brief
+                self.view.brief = brief
+                self.view.allocation = allocation
+                self.view.last_proposal_t = obs.world_time
+                reasoning = f"Team order — all assets proceed {dist:.0f} km {_CARDINAL.get(bearing, '')}."
+                await self.client.send_p2p("all", "proposal", {"brief": brief, "allocation": allocation},
+                                           reasoning=reasoning)
+                await self.client.send_cot(f"Plan: {reasoning}\n")
+                logger.info("[%s] (leader) directional order: %s km bearing %.0f",
+                            self.ctx.agent_id, dist, bearing)
+                return
+
+            engaged = self._engaged_map()
             # Divide the area only among the un-engaged assets; keep the engaged
             # ones on their current task.
             to_allocate = [m for m in members if m["id"] not in engaged] or members
@@ -360,6 +408,8 @@ class AgentBrain:
                                    "rendezvous": assignment.get("rendezvous")})
         elif kind == "rendezvous":
             spec = ("rendezvous", {"poi_id": assignment.get("poi_id") or assignment.get("point")})
+        elif kind == "go_to":
+            spec = ("go_to", {"lat": assignment.get("lat"), "lon": assignment.get("lon")})
         elif kind == "hold":
             spec = ("hold_position", {"seconds": 60})
         try:
@@ -433,6 +483,10 @@ class AgentBrain:
         # Once committed to following a vessel, stay on it.
         if self._dynamic_assignment is not None:
             return
+        # A directional team order ('go south') is obeyed as-is — don't get pulled
+        # off course by passing contacts.
+        if self.assignment and (self.assignment.get("kind") or "") == "go_to":
+            return
 
         # Follow/shadow mission: a sensed unreported vessel IS the target — engage
         # it directly and deterministically (no fragile chase-to-identify, no
@@ -479,7 +533,9 @@ class AgentBrain:
                     self.ctx)
                 self._handled.add(cid)
                 await self.client.send_cot((d.get("reasoning") or f"Reporting {cid}") + "\n")
-            elif action == "escort" and cid:
+            elif action == "escort" and cid and self._is_follow_mission():
+                # Only commit to following when the mission actually calls for it
+                # (guards against the model proposing escort on an unrelated order).
                 standoff = d.get("standoff_m") or self._mission_standoff_m()
                 await self._engage_escort(
                     cid, standoff, d.get("reasoning") or f"Following {cid} at {int(standoff)} m")

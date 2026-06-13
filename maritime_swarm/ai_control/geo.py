@@ -40,3 +40,12 @@ def bearing_deg(lat1: float, lon1: float, lat2: float, lon2: float) -> float:
 
 def clamp(value: float, low: float, high: float) -> float:
     return max(low, min(high, value))
+
+
+def destination(lat: float, lon: float, bearing_deg: float, dist_km: float) -> tuple[float, float]:
+    """Point reached by travelling ``dist_km`` from (lat,lon) on a compass bearing."""
+    b = math.radians(bearing_deg)
+    dlat = (dist_km / 111.32) * math.cos(b)
+    cos_lat = math.cos(math.radians(lat)) or 1e-6
+    dlon = (dist_km / (111.32 * cos_lat)) * math.sin(b)
+    return (lat + dlat, lon + dlon)
