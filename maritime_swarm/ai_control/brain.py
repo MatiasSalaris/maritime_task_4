@@ -28,9 +28,12 @@ from maritime_swarm.ai_control.world_client import WorldModelClient
 logger = logging.getLogger(__name__)
 
 STATUS_INTERVAL_S = 4.0      # world-time between status heartbeats
-DECISION_INTERVAL_S = 10.0   # think at least this often (wall clock)
-MIN_DECISION_INTERVAL_S = 6.0  # never think more often than this
-RATE_LIMIT_COOLDOWN_S = 25.0  # back off this long after an LLM rate-limit (429)
+# Event-driven thinking: react fast to events (a peer message, a new contact, a
+# finished task, a mission change) but only poll slowly when nothing changes.
+# This is responsive where it matters AND frugal with the LLM token budget.
+DECISION_INTERVAL_S = 25.0   # idle heartbeat — re-think this often with no events
+MIN_DECISION_INTERVAL_S = 5.0  # floor between decisions (responsiveness to events)
+RATE_LIMIT_COOLDOWN_S = 8.0   # fallback backoff if a 429 carries no retry-after
 _NO_OP_TOOLS = {"", "continue", "none", "keep", "hold_current"}
 
 
@@ -204,9 +207,18 @@ class AgentBrain:
                     except ToolError as exc:
                         logger.info("[%s] tool rejected (%s) — keeping current", self.ctx.agent_id, exc)
         except Exception as exc:
-            if "429" in str(exc):
-                self._cooldown_until = time.monotonic() + RATE_LIMIT_COOLDOWN_S
-                logger.info("[%s] rate-limited (429) — backing off %.0fs", self.ctx.agent_id, RATE_LIMIT_COOLDOWN_S)
+            resp = getattr(exc, "response", None)
+            status = getattr(resp, "status_code", None)
+            if status == 429 or "429" in str(exc):
+                retry = None
+                if resp is not None:
+                    try:
+                        retry = float(resp.headers.get("retry-after"))
+                    except (TypeError, ValueError):
+                        retry = None
+                backoff = retry if retry else RATE_LIMIT_COOLDOWN_S
+                self._cooldown_until = time.monotonic() + backoff
+                logger.info("[%s] rate-limited (429) — backing off %.1fs", self.ctx.agent_id, backoff)
             else:
                 logger.warning("[%s] decider error: %s", self.ctx.agent_id, exc)
         finally:

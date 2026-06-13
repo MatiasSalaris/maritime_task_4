@@ -207,3 +207,7 @@ class ToolRegistry:
                     f"    • {pname} ({spec.get('type', 'any')}){req}: {spec.get('description', '')}"
                 )
         return "\n".join(lines)
+
+    def compact_block(self) -> str:
+        """One terse line per tool (token-frugal) for the system prompt."""
+        return "\n".join(f"- {t.signature()}: {t.description}" for t in self._tools.values())

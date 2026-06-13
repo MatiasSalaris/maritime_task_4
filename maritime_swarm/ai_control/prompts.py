@@ -12,7 +12,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from maritime_swarm.ai_control.coordination import SECTORS, sector_center
+from maritime_swarm.ai_control.coordination import SECTORS
 from maritime_swarm.ai_control.geo import haversine_km
 from maritime_swarm.ai_control.observation import Observation
 from maritime_swarm.ai_control.scene import Scene
@@ -21,49 +21,29 @@ from maritime_swarm.ai_control.tools import ToolContext, ToolRegistry
 _SENSOR_BY_TYPE = {"USV": "360° surface radar", "UAV": "downward EO/IR camera"}
 
 _FEWSHOT = """\
-EXAMPLES (format only — your situation differs):
-{"reasoning":"Alpha took the north, so I'll cover the south-west to avoid overlap.","messages":[{"to":"all","type":"ack","content":"Copy — I'll patrol SW."}],"action":{"tool":"patrol_sector","args":{"sector":"SW"}}}
-{"reasoning":"Order is to move 5 km south; proceeding south.","messages":[],"action":{"tool":"move","args":{"direction":"south","distance_km":5}}}
-{"reasoning":"Unknown c003 is located and the order is for all to intercept it.","messages":[{"to":"all","type":"proposal","content":"Target c003 located — all intercept."}],"action":{"tool":"investigate_contact","args":{"contact_id":"c003"}}}
-{"reasoning":"I have the unreported vessel; order is to shadow at 500 m, so I'll escort and let peers keep coverage.","messages":[{"to":"all","type":"handoff","content":"Engaging c003 at 500 m; you two keep coverage."}],"action":{"tool":"escort_contact","args":{"contact_id":"c003","standoff_m":500}}}
+EXAMPLES (format only):
+{"reasoning":"Alpha took the north; I'll cover SW to avoid overlap.","messages":[{"to":"all","type":"ack","content":"Copy — I take SW."}],"action":{"tool":"patrol_sector","args":{"sector":"SW"}}}
+{"reasoning":"Only I sense the unreported vessel and the order is to shadow it; engaging at 500 m.","messages":[{"to":"all","type":"handoff","content":"Engaging c003 at 500 m; you keep coverage."}],"action":{"tool":"escort_contact","args":{"contact_id":"c003","standoff_m":500}}}
 """
 
 
 def build_decision_system_prompt(registry: ToolRegistry) -> str:
     return (
-        "You are ONE of three autonomous maritime assets operating as a peer team. Each asset "
-        "(including you) runs its own reasoning — there is NO commander and no central planner. "
-        "You are given a mission in plain language and must accomplish it by REASONING, "
-        "COMMUNICATING with your two peers, and ACTING. Coordination must emerge between you.\n\n"
-        "STANDING DOCTRINE:\n"
-        "- Operations are persistent and continuous: never declare the mission done and never stop "
-        "unless explicitly ordered to. After achieving an objective, keep operating sensibly.\n"
-        "- Interpret the mission literally and intelligently, however it is phrased. Decompose it, "
-        "decide your part, and use the tools to carry it out.\n\n"
-        "COORDINATION — THERE IS NO COMMANDER. No node decides for anyone else; you decide ONLY "
-        "your OWN next action. The team's division of labour must be AGREED by chatting:\n"
-        "- Say what you intend and why (proposal); answer your peers (ack to agree, objection to "
-        "disagree WITH a reason and a counter-proposal). Keep talking until you converge.\n"
-        "- Do not unilaterally grab a shared task before the team has agreed who does what; but for "
-        "an obvious local action only you can take (e.g. only you sense the target), act and tell them.\n"
-        "- If, AFTER discussing, you and a peer still both want the same thing, the lower-id asset "
-        "(agent_0<agent_1<agent_2) keeps it and the other takes the complementary part — a shared "
-        "convention you both apply to break ties, NOT an order from anyone. Respect what peers have "
-        "committed to; cover for a peer that has gone silent.\n\n"
-        "GROUNDING:\n"
-        "- Only use contact ids and POI ids that actually appear in your situation. NEVER invent ids "
-        "or act on a contact that does not exist. Prefer symbolic targets (sectors, POI ids, contact "
-        "ids) and the 'move'/'go_to_poi' tools over raw coordinates.\n\n"
-        "ACTIONS (choose exactly one tool):\n"
-        f"{registry.prompt_block()}\n\n"
-        "MESSAGE TYPES: proposal (suggest a plan), ack (agree), objection (disagree + counter), "
-        "handoff (take/hand over a task), report (flag/annotate a contact), status (info).\n\n"
-        "Respond with ONE JSON object only, exactly:\n"
-        '{"reasoning":"<1-3 sentences of why>",'
-        '"messages":[{"to":"all|agent_0|agent_1|agent_2","type":"<type>","content":"<short text>"}],'
-        '"action":{"tool":"<tool name>","args":{...}}}\n'
-        "messages may be an empty list. Keep messages short and operational.\n\n"
-        + _FEWSHOT
+        "You are ONE of three peer maritime assets. There is NO commander: you decide ONLY your "
+        "own next action, and the team divides work by CHATTING until you agree.\n"
+        "- Persistent ops: never stop unless ordered; after a goal, keep operating sensibly.\n"
+        "- Interpret the mission however phrased; decompose it and use tools to carry out your part.\n"
+        "- Coordinate: state intent (proposal), answer peers (ack / objection+counter). Don't grab a "
+        "shared task before agreeing; but act alone on what only you can do (e.g. only you sense the "
+        "target). If you and a peer still want the same thing, the lower id keeps it and the other "
+        "takes the complement (a shared tie-break, not an order). Respect commitments; cover a silent peer.\n"
+        "- Grounding: only use contact/POI ids present in your situation; never invent them.\n\n"
+        "ACTIONS (choose exactly one):\n"
+        f"{registry.compact_block()}\n\n"
+        "MSG TYPES: proposal, ack, objection, handoff, report, status.\n"
+        "Reply with ONE JSON object only:\n"
+        '{"reasoning":"<1-2 sentences>","messages":[{"to":"all|agent_0|agent_1|agent_2","type":"<type>","content":"<short>"}],"action":{"tool":"<name>","args":{...}}}\n'
+        "messages may be []. Keep it short.\n\n" + _FEWSHOT
     )
 
 
@@ -89,8 +69,7 @@ def build_decision_user_prompt(
 
     # ── world: area + contacts ────────────────────────────────────────────
     L.append(f"OPERATING AREA (geofence): lat {b.lat_min:.3f}..{b.lat_max:.3f}, lon {b.lon_min:.3f}..{b.lon_max:.3f}.")
-    L.append("SECTORS (centre): " + "; ".join(
-        f"{s}@{sector_center(b, s)[0]:.3f},{sector_center(b, s)[1]:.3f}" for s in SECTORS))
+    L.append(f"SECTORS for patrol_sector: {', '.join(SECTORS)}.")
     if scene.pois:
         L.append("POIs: " + "; ".join(f"{p.id}({p.label})@{p.lat:.3f},{p.lon:.3f}" for p in scene.pois))
     L.append("")

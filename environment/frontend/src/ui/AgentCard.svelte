@@ -1,9 +1,26 @@
 <script>
-  import { agentColor, actionTag } from '../store/worldStore.js'
+  import { agentColor, actionTag, worldState } from '../store/worldStore.js'
 
   export let agent
   export let selected = false
   export let onSelect = () => {}
+
+  const MSG_ICON  = { proposal: '◆', ack: '✓', objection: '✕', handoff: '→', report: '⚑', status: '●' }
+  const MSG_COLOR = { proposal: '#00d4ff', ack: '#00ff88', objection: '#ff3355', handoff: '#ffaa00', report: '#ff8800', status: '#6a8a9a' }
+
+  function agentName(id) {
+    if (id === 'all') return 'ALL'
+    return $worldState.agents?.find(a => a.id === id)?.name ?? id
+  }
+
+  // Per-agent comms audit: messages this asset sent or received (excluding the
+  // high-frequency status heartbeats). Only computed while the card is selected.
+  $: comms = selected
+    ? ($worldState.message_log ?? [])
+        .filter(m => m.msg_type !== 'status' &&
+                     (m.from_agent === agent.id || m.to_agent === agent.id || m.to_agent === 'all'))
+        .slice(-8)
+    : []
 
   // Keep the chain-of-thought pinned to the latest entry unless the user has
   // scrolled up to read earlier reasoning (standard "stick to bottom" behaviour).
@@ -104,6 +121,27 @@
     </div>
   {/if}
 
+  {#if selected}
+    <div class="comms">
+      <div class="cot-title">COMMS AUDIT {#if comms.length}<span class="cot-count">({comms.length})</span>{/if}</div>
+      {#if comms.length}
+        <div class="comms-list">
+          {#each comms as m (m.id)}
+            <div class="cmsg">
+              <span class="cdir">{m.from_agent === agent.id ? '▶ sent' : '◀ recv'}</span>
+              <span class="cicon" style="color:{MSG_COLOR[m.msg_type] ?? '#888'}">{MSG_ICON[m.msg_type] ?? '?'}</span>
+              <span class="cpeer">{m.from_agent === agent.id ? agentName(m.to_agent) : agentName(m.from_agent)}</span>
+              <span class="ctype" style="color:{MSG_COLOR[m.msg_type] ?? '#888'}">{m.msg_type}</span>
+              {#if m.reasoning}<div class="ctext">{m.reasoning}</div>{/if}
+            </div>
+          {/each}
+        </div>
+      {:else}
+        <div class="comms-empty">No messages yet.</div>
+      {/if}
+    </div>
+  {/if}
+
   <div class="controls">
     {#if agent.status !== 'silent'}
       <button class="ctrl-btn danger" title="Simulate comms loss"
@@ -190,6 +228,18 @@
   .cot-line.latest {
     color: #b8dcec; border-left-color: var(--agent-color);
   }
+
+  .comms { background: #06101a; border-radius: 4px; padding: 8px 10px; margin-bottom: 8px; }
+  .comms-list { display: flex; flex-direction: column; gap: 5px; max-height: 150px; overflow-y: auto;
+                scrollbar-width: thin; scrollbar-color: #1a3a5a transparent; }
+  .cmsg { font-family: monospace; font-size: 11px; line-height: 1.35; }
+  .cdir  { color: #4a7a9a; }
+  .cicon { margin: 0 4px; }
+  .cpeer { color: #c8d8e8; font-weight: bold; }
+  .ctype { color: #6a8a9a; margin-left: 5px; }
+  .ctext { color: #9fc0d0; padding: 1px 0 2px 10px; border-left: 2px solid #15303f; margin-top: 2px;
+           white-space: pre-wrap; }
+  .comms-empty { font-size: 11px; color: #3a5a7a; }
 
   .controls { display: flex; gap: 6px; }
   .ctrl-btn {
