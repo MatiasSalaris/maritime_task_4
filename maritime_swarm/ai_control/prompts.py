@@ -127,7 +127,8 @@ def build_decision_user_prompt(
     if outbox:
         L.append("YOUR RECENT MESSAGES (what you already told the team):")
         for m in outbox:
-            L.append(f"  - [{m['type']}→{m['to']}]: {m['text']}")
+            text = m.get("content") or m.get("text") or ""
+            L.append(f"  - [{m.get('type', 'status')}→{m.get('to', 'all')}]: {text}")
     L.append("")
     L.append("Decide your OWN next action only. Reason over the state above, talk to your peers to "
              "agree the division of work, and choose one action. JSON only.")

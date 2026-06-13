@@ -135,6 +135,7 @@ class AgentBrain:
             if incoming:
                 self.mission = incoming
                 self._dirty = True
+                self._outbox.clear()
                 logger.info("[%s] new mission: %s", self.ctx.agent_id, incoming)
                 asyncio.create_task(self.client.send_cot(f"New mission — re-thinking: {incoming}\n"))
             else:

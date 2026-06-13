@@ -161,6 +161,21 @@ def test_heuristic_decider_runs():
     assert out2["tool"] == "investigate_contact"
 
 
+def test_decision_prompt_builds_with_full_state():
+    # Regression: the outbox carries {to,type,content}; the prompt must not KeyError.
+    from maritime_swarm.ai_control.prompts import build_decision_user_prompt
+    obs = make_obs(37.5, 15.1, [SensedContact(id="c1", lat=37.5, lon=15.1, flagged=True)])
+    p = build_decision_user_prompt(
+        obs, make_ctx(obs=obs), SCENE, "patrol and report",
+        peers=[{"id": "agent_1", "type": "USV", "lat": 37.49, "lon": 15.16, "task": "Patrolling SE"}],
+        shared_contacts=[{"id": "c9", "label": "UNKNOWN", "flagged": True, "reported": False, "lat": 37.5, "lon": 15.2}],
+        messages=[{"sender": "agent_1", "type": "proposal", "text": "I'll take SE"}],
+        current_task="Patrolling NW", task_status="executing", silent_peers=["agent_2"],
+        outbox=[{"to": "all", "type": "ack", "content": "Copy, I take NW"}],
+    )
+    assert "Patrolling NW" in p and "SILENT" in p and "Copy, I take NW" in p and "c1" in p
+
+
 def test_registry_has_full_toolset():
     names = set(default_registry().names())
     assert {"go_to", "move", "go_to_poi", "patrol_sector", "investigate_contact",
