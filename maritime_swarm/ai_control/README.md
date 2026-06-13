@@ -58,23 +58,31 @@ heuristic decider.
 | Var | Default | Meaning |
 |-----|---------|---------|
 | `GROQ_API_KEY`/`API_KEY` | – | LLM key |
-| `GROQ_MODEL` | `llama-3.1-8b-instant` | model — set to `llama-3.3-70b-versatile` for stronger reasoning if your key's rate limits allow |
+| `GROQ_MODEL` | `llama-3.1-8b-instant` | small open-weight model (the challenge's intent) |
+| `LLM_BASE_URL` | Groq | OpenAI-compatible endpoint — point at a **local Ollama** (`http://host.docker.internal:11434/v1`) to run the exact suggested models (Llama 3.2 3B, Qwen 2.5 7B, Mistral 7B, Gemma 2) with no rate limits |
 | `WORLD_HTTP_URL` / `WORLD_WS_URL` | localhost:8000 | world model |
 | `MISSION` | – | override (else adopts the world's mission) |
 | `FAKE_LLM` | `0` | force the offline heuristic decider |
 
+**Model note:** the challenge suggests small open-weight models (Llama 3.2 3B,
+Qwen 2.5 7B, Mistral 7B, Gemma 2). Groq has **decommissioned** all of those, so
+the default is `llama-3.1-8b-instant` — the small open-weight Llama still served
+there. To run the *exact* suggested models, serve them locally via Ollama and
+set `LLM_BASE_URL` + `GROQ_MODEL` (e.g. `llama3.2:3b`). We deliberately do **not**
+use a 70B model — it is neither "small open-weight" nor sustainable for three
+concurrent agents on a free key.
+
 ## Where the swarm breaks (honest limits)
 
-- **LLM rate limits dominate.** Three agents reasoning concurrently exceed
-  Groq's free-tier tokens/minute, especially on the 70B model — decisions get
-  `429`'d. The loop handles it (staggered starts, a ~25 s backoff, and the agent
-  keeps its current action), but under heavy load the effective decision cadence
-  stretches and coordination slows. A higher-rate key (or local serving via
-  Ollama) removes this; the 8B default stays responsive.
-- **Small-model judgement.** `llama-3.1-8b-instant` keeps the swarm responsive
-  but occasionally mis-phrases a plan or picks a blunt tool; the grounding and
-  the few-shot conventions catch the worst. A 70B model is visibly sharper when
-  the rate limits allow it.
+- **LLM rate limits.** Three agents reasoning concurrently can exceed Groq's
+  free-tier tokens/minute and get `429`'d. The loop handles it (staggered starts,
+  a ~25 s backoff, and the agent keeps its current action), but under heavy load
+  the cadence stretches and coordination slows. Local serving via Ollama removes
+  this entirely.
+- **Small-model judgement.** A small open-weight model (8B / 3B / 7B) keeps the
+  swarm responsive and is what the challenge intends, but it occasionally
+  mis-phrases a plan or picks a blunt tool; the grounding and the few-shot
+  conventions catch the worst.
 - **Convergence is social, not guaranteed.** With no commander, two agents can
   briefly contend for the same task before the lower-id convention settles it;
   pathological oscillation is possible (and shown rather than hidden).

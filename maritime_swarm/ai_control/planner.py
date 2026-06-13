@@ -60,6 +60,8 @@ class AgentDecider(Protocol):
         self, obs: Observation, ctx: ToolContext, scene: Scene, mission: str,
         peers: list[dict[str, Any]], shared_contacts: list[dict[str, Any]],
         messages: list[dict[str, Any]], current_task: str | None, registry: ToolRegistry,
+        task_status: str = "idle", silent_peers: list[str] | None = None,
+        outbox: list[dict[str, Any]] | None = None,
     ) -> dict[str, Any]:
         ...
 
@@ -68,9 +70,12 @@ class GroqDecider:
     def __init__(self, api_key: str, model: str, temperature: float = 0.3) -> None:
         self.api_key, self.model, self.temperature = api_key, model, temperature
 
-    def decide(self, obs, ctx, scene, mission, peers, shared_contacts, messages, current_task, registry):
+    def decide(self, obs, ctx, scene, mission, peers, shared_contacts, messages, current_task, registry,
+               task_status="idle", silent_peers=None, outbox=None):
         raw = inferenza_json(
-            prompt=build_decision_user_prompt(obs, ctx, scene, mission, peers, shared_contacts, messages, current_task),
+            prompt=build_decision_user_prompt(
+                obs, ctx, scene, mission, peers, shared_contacts, messages, current_task,
+                task_status, silent_peers, outbox),
             api_key=self.api_key,
             system_prompt=build_decision_system_prompt(registry),
             model=self.model,
@@ -88,7 +93,8 @@ class HeuristicDecider:
 
     _SECTORS = ["NW", "NE", "SW", "SE"]
 
-    def decide(self, obs, ctx, scene, mission, peers, shared_contacts, messages, current_task, registry):
+    def decide(self, obs, ctx, scene, mission, peers, shared_contacts, messages, current_task, registry,
+               task_status="idle", silent_peers=None, outbox=None):
         susp = [c for c in obs.contacts if c.is_suspicious]
         if susp:
             nearest = min(susp, key=lambda c: haversine_km(obs.lat, obs.lon, c.lat, c.lon))

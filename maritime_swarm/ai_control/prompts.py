@@ -40,14 +40,16 @@ def build_decision_system_prompt(registry: ToolRegistry) -> str:
         "unless explicitly ordered to. After achieving an objective, keep operating sensibly.\n"
         "- Interpret the mission literally and intelligently, however it is phrased. Decompose it, "
         "decide your part, and use the tools to carry it out.\n\n"
-        "COORDINATION (no commander — converge by argument):\n"
-        "- Announce your intent to peers and read theirs. Divide the work so you do not duplicate "
-        "each other; converge together only when the mission calls for it.\n"
-        "- If you and a peer want the SAME task/sector/target, the LOWER-ID asset (agent_0 < "
-        "agent_1 < agent_2) keeps it and the other takes a complementary task. Respect commitments "
-        "a peer has already announced; once you commit, stick with it unless the mission changes or "
-        "a clearly better division emerges.\n"
-        "- If a peer goes silent, cover for it.\n\n"
+        "COORDINATION — THERE IS NO COMMANDER. No node decides for anyone else; you decide ONLY "
+        "your OWN next action. The team's division of labour must be AGREED by chatting:\n"
+        "- Say what you intend and why (proposal); answer your peers (ack to agree, objection to "
+        "disagree WITH a reason and a counter-proposal). Keep talking until you converge.\n"
+        "- Do not unilaterally grab a shared task before the team has agreed who does what; but for "
+        "an obvious local action only you can take (e.g. only you sense the target), act and tell them.\n"
+        "- If, AFTER discussing, you and a peer still both want the same thing, the lower-id asset "
+        "(agent_0<agent_1<agent_2) keeps it and the other takes the complementary part — a shared "
+        "convention you both apply to break ties, NOT an order from anyone. Respect what peers have "
+        "committed to; cover for a peer that has gone silent.\n\n"
         "GROUNDING:\n"
         "- Only use contact ids and POI ids that actually appear in your situation. NEVER invent ids "
         "or act on a contact that does not exist. Prefer symbolic targets (sectors, POI ids, contact "
@@ -69,46 +71,64 @@ def build_decision_user_prompt(
     obs: Observation, ctx: ToolContext, scene: Scene, mission: str,
     peers: list[dict[str, Any]], shared_contacts: list[dict[str, Any]],
     messages: list[dict[str, Any]], current_task: str | None,
+    task_status: str = "idle", silent_peers: list[str] | None = None,
+    outbox: list[dict[str, Any]] | None = None,
 ) -> str:
+    """The full state the asset reasons on: per-agent, shared (mission/comms), world."""
     b = scene.bounds
-    lines = [f"MISSION: {mission}", ""]
-    lines.append(
-        f"YOU: {ctx.agent_name} ({ctx.agent_id}), a {ctx.agent_type} with "
-        f"{_SENSOR_BY_TYPE.get(ctx.agent_type, 'sensors')}, cruise {ctx.cruise_speed_kn:.0f} kn. "
-        f"Position {obs.lat:.4f},{obs.lon:.4f}, heading {obs.heading:.0f}°, speed {obs.speed_kn:.1f} kn.")
-    lines.append(f"YOUR CURRENT TASK: {current_task or 'none'}.")
-    lines.append("")
-    lines.append(f"OPERATING AREA: lat {b.lat_min:.3f}..{b.lat_max:.3f}, lon {b.lon_min:.3f}..{b.lon_max:.3f}.")
-    sec = "; ".join(f"{s}@{sector_center(b, s)[0]:.3f},{sector_center(b, s)[1]:.3f}" for s in SECTORS)
-    lines.append(f"SECTORS (centre): {sec}.")
-    if scene.pois:
-        lines.append("POIs: " + "; ".join(f"{p.id}({p.label})@{p.lat:.3f},{p.lon:.3f}" for p in scene.pois))
-    lines.append("")
+    L = [f"MISSION (verbatim): {mission}", ""]
 
+    # ── per-agent state ───────────────────────────────────────────────────
+    L.append("YOUR STATE:")
+    L.append(f"  id={ctx.agent_id} name={ctx.agent_name} type={ctx.agent_type} "
+             f"sensor={_SENSOR_BY_TYPE.get(ctx.agent_type, 'sensors')} cruise={ctx.cruise_speed_kn:.0f}kn")
+    L.append(f"  position={obs.lat:.4f},{obs.lon:.4f} heading={obs.heading:.0f}° speed={obs.speed_kn:.1f}kn")
+    L.append(f"  current_task={current_task or 'none'} status={task_status}")
+    L.append(f"  contacts_in_range={len(obs.contacts)}")
+    L.append("")
+
+    # ── world: area + contacts ────────────────────────────────────────────
+    L.append(f"OPERATING AREA (geofence): lat {b.lat_min:.3f}..{b.lat_max:.3f}, lon {b.lon_min:.3f}..{b.lon_max:.3f}.")
+    L.append("SECTORS (centre): " + "; ".join(
+        f"{s}@{sector_center(b, s)[0]:.3f},{sector_center(b, s)[1]:.3f}" for s in SECTORS))
+    if scene.pois:
+        L.append("POIs: " + "; ".join(f"{p.id}({p.label})@{p.lat:.3f},{p.lon:.3f}" for p in scene.pois))
+    L.append("")
     if obs.contacts:
-        lines.append("CONTACTS YOU SENSE NOW:")
+        L.append("CONTACTS YOU SENSE NOW:")
         for c in obs.contacts:
             d = haversine_km(obs.lat, obs.lon, c.lat, c.lon)
             tag = "SUSPICIOUS(unreported/unknown)" if c.is_suspicious else "benign-AIS"
-            lines.append(f"  - {c.id} [{tag}] class={c.label} at {c.lat:.4f},{c.lon:.4f} "
-                         f"course {c.heading:.0f}° {c.speed_kn:.0f}kn dist {d:.2f}km")
+            L.append(f"  - {c.id} [{tag}] class={c.label} at {c.lat:.4f},{c.lon:.4f} "
+                     f"course {c.heading:.0f}° {c.speed_kn:.0f}kn dist {d:.2f}km")
     else:
-        lines.append("CONTACTS YOU SENSE NOW: none.")
-
-    if peers:
-        lines.append("PEERS (from their status):")
-        for p in peers:
-            lines.append(f"  - {p['id']} ({p.get('type','?')}) at {p['lat']:.4f},{p['lon']:.4f}, "
-                         f"task: {p.get('task') or 'unknown'}")
+        L.append("CONTACTS YOU SENSE NOW: none.")
     if shared_contacts:
-        lines.append("SHARED CONTACTS (sensed by peers): " + "; ".join(
+        L.append("SHARED CONTACTS (reported by peers): " + "; ".join(
             f"{c['id']}({c.get('label','?')}{' FLAGGED' if c.get('flagged') else ''}"
             f"{' REPORTED' if c.get('reported') else ''})@{c['lat']:.3f},{c['lon']:.3f}"
             for c in shared_contacts))
+    L.append("")
+
+    # ── shared: team / comms (failure honesty) ────────────────────────────
+    L.append("TEAM (peers you can currently hear):")
+    if peers:
+        for p in peers:
+            L.append(f"  - {p['id']} ({p.get('type','?')}) at {p['lat']:.4f},{p['lon']:.4f} "
+                     f"task: {p.get('task') or 'unknown'}")
+    else:
+        L.append("  (none heard yet)")
+    if silent_peers:
+        L.append(f"SILENT / UNREACHABLE peers (no recent comms — cover for them): {', '.join(silent_peers)}")
     if messages:
-        lines.append("RECENT PEER MESSAGES:")
+        L.append("INBOX (recent messages FROM peers):")
         for m in messages:
-            lines.append(f"  - {m['sender']} [{m['type']}]: {m['text']}")
-    lines.append("")
-    lines.append("Decide: reasoning, any coordination messages, and your single next action. JSON only.")
-    return "\n".join(lines)
+            L.append(f"  - {m['sender']} [{m['type']}]: {m['text']}")
+    if outbox:
+        L.append("YOUR RECENT MESSAGES (what you already told the team):")
+        for m in outbox:
+            L.append(f"  - [{m['type']}→{m['to']}]: {m['text']}")
+    L.append("")
+    L.append("Decide your OWN next action only. Reason over the state above, talk to your peers to "
+             "agree the division of work, and choose one action. JSON only.")
+    return "\n".join(L)

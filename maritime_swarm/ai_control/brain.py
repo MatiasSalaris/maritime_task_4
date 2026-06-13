@@ -65,6 +65,7 @@ class AgentBrain:
         self._last_msg_count = 0
         self._seen_contacts: set[str] = set()
         self._cooldown_until = 0.0   # set after a 429 to avoid hammering the API
+        self._outbox: list[dict[str, Any]] = []   # recent messages we sent (own state)
 
     # ── main loop ──────────────────────────────────────────────────────────
     async def run(self) -> None:
@@ -172,12 +173,17 @@ class AgentBrain:
     async def _think(self, obs: Observation) -> None:
         try:
             peers, shared, messages = self._context()
+            task_status = "executing" if self.active_tool is not None else "idle"
+            silent = self.view.silent_peer_ids()
             d = await asyncio.to_thread(
                 self.decider.decide, obs, self.ctx, self.scene, self.mission,
-                peers, shared, messages, self._current_task, self.registry)
+                peers, shared, messages, self._current_task, self.registry,
+                task_status, silent, list(self._outbox))
 
             for m in d["messages"]:
                 await self.client.send_p2p(m["to"], m["type"], {"text": m["content"]}, reasoning=m["content"])
+                self._outbox.append(m)
+                self._outbox = self._outbox[-5:]
 
             reasoning = d.get("reasoning") or ""
             if reasoning:

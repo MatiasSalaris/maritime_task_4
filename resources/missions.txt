@@ -1,0 +1,4 @@
+Patrol the area and report any unknown vessel, then shorten distance to it at 500m; Everyone converge to the last reported unknown vessel and skeep at a 250m distance;;
+Escort the marked vessel for 30 minutes, maintain a 500 m loose formation.; form a line formation 100m behind the vessel, each drone spaced by 500m;;
+
+

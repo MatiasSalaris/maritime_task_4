@@ -1,11 +1,25 @@
-"""Small OpenAI-compatible client for real LLM calls."""
+"""Small OpenAI-compatible client for real LLM calls.
+
+Defaults to the Groq endpoint, but the base URL is configurable via
+``LLM_BASE_URL`` (or ``GROQ_BASE_URL``) so the swarm can run the exact
+open-weight models the challenge suggests (Llama 3.2 3B, Qwen 2.5 7B, Mistral
+7B, Gemma 2) served locally via Ollama / LM Studio, e.g.
+``LLM_BASE_URL=http://localhost:11434/v1``.
+"""
 
 from __future__ import annotations
 
 import json
+import os
 from typing import Any
 
 import requests
+
+_DEFAULT_BASE_URL = "https://api.groq.com/openai/v1"
+
+
+def _base_url() -> str:
+    return (os.getenv("LLM_BASE_URL") or os.getenv("GROQ_BASE_URL") or _DEFAULT_BASE_URL).rstrip("/")
 
 
 def inferenza(
@@ -31,10 +45,10 @@ def inferenza(
         payload["response_format"] = {"type": "json_object"}
 
     response = requests.post(
-        "https://api.groq.com/openai/v1/chat/completions",
-        headers={"Authorization": f"Bearer {api_key}"},
+        f"{_base_url()}/chat/completions",
+        headers={"Authorization": f"Bearer {api_key}", "User-Agent": "maritime-swarm/1.0"},
         json=payload,
-        timeout=30,
+        timeout=45,
     )
     response.raise_for_status()
     return response.json()["choices"][0]["message"]["content"]
