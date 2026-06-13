@@ -54,3 +54,6 @@ class Observation(BaseModel):
     messages_inbox: list[dict] = []
     world_time: float
     mission: Optional[str] = None
+    mission_status: str = "idle"
+    mission_result: Optional[dict] = None
+    aor: Optional[dict] = None

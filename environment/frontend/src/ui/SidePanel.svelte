@@ -3,9 +3,11 @@
   import MissionBox   from './MissionBox.svelte'
   import AgentCard    from './AgentCard.svelte'
   import MessageLog   from './MessageLog.svelte'
+  import MissionTimeline from './MissionTimeline.svelte'
   import DemoControls from './DemoControls.svelte'
 
   const STATUS_DOT = { connected: '#00ff88', disconnected: '#ff3355', reconnecting: '#ffaa00' }
+  const STATUS_LABEL = { connected: 'CONNESSO', disconnected: 'DISCONNESSO', reconnecting: 'RICONNESSIONE' }
 </script>
 
 <aside class="panel">
@@ -14,7 +16,7 @@
     <div class="brand">MARITIME SWARM</div>
     <div class="ws-status">
       <span class="ws-dot" style="background:{STATUS_DOT[$wsStatus] ?? '#888'}"></span>
-      <span class="ws-label">{$wsStatus.toUpperCase()}</span>
+      <span class="ws-label">{STATUS_LABEL[$wsStatus] ?? $wsStatus.toUpperCase()}</span>
     </div>
   </div>
 
@@ -26,7 +28,7 @@
 
   <!-- Agent cards -->
   <div class="agents-section">
-    <div class="section-title">VEHICLES</div>
+    <div class="section-title">MEZZI</div>
     {#each ($worldState.agents ?? []) as agent (agent.id)}
       <AgentCard
         {agent}
@@ -37,6 +39,8 @@
       />
     {/each}
   </div>
+
+  <MissionTimeline />
 
   <!-- Message log -->
   <MessageLog />

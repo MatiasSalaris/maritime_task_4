@@ -17,11 +17,21 @@ const LAYER_GOD_LABEL     = 'layer-contacts-god-label'
 
 const COLOR_BY_LABEL = [
   'match', ['get', 'label'],
+  'BUOY',           '#ffd84a',
   'AIS_COMMERCIAL', '#4ea0ff',
   'AIS_FISHING',    '#7fe0a0',
   'UNKNOWN',        '#ff5a3c',
   '#ff3355',
 ]
+
+function contactKind(contact) {
+  const label = contact.label ?? ''
+  if (label === 'BUOY') return 'Boa dispersa'
+  if (contact.flagged || label === 'UNKNOWN') return 'Contatto sospetto'
+  if (label === 'AIS_COMMERCIAL') return 'Nave commerciale'
+  if (label === 'AIS_FISHING') return 'Peschereccio'
+  return 'Contatto'
+}
 
 function haversineKm(aLat, aLon, bLat, bLon) {
   const R = 6371.0
@@ -34,9 +44,9 @@ function haversineKm(aLat, aLon, bLat, bLon) {
 
 function timeAgo(seconds) {
   const s = Math.max(0, Math.round(seconds))
-  if (s < 60)   return `${s}s ago`
-  if (s < 3600) return `${Math.floor(s / 60)}m ago`
-  return `${Math.floor(s / 3600)}h ago`
+  if (s < 60)   return `${s}s fa`
+  if (s < 3600) return `${Math.floor(s / 60)}m fa`
+  return `${Math.floor(s / 3600)}h fa`
 }
 
 function emptyFC() {
@@ -51,9 +61,9 @@ export class ContactLayer {
   constructor(map, animCanvas) {
     this._map        = map
     this._animCanvas = animCanvas
-    // client-side track memory: id → { natoId, firstSeen, lastSeen, lastPos }
+    // client-side track memory: id → { displayId, firstSeen, lastSeen, lastPos }
     this._tracks     = new Map()
-    this._natoCount  = 0
+    this._trackCount = 0
     // cached at data rate; consumed at 60 fps in renderFrame()
     this._contacts   = []
     this._godView    = false
@@ -65,7 +75,7 @@ export class ContactLayer {
   /** Wipe all track memory (call on demo/world reset). */
   reset() {
     this._tracks.clear()
-    this._natoCount = 0
+    this._trackCount = 0
   }
 
   init() {
@@ -103,7 +113,7 @@ export class ContactLayer {
       type: 'symbol',
       source: SRC_ACTIVE,
       layout: {
-        'text-field': ['coalesce', ['get', 'nato_id'], ['get', 'label']],
+        'text-field': ['coalesce', ['get', 'display_id'], ['get', 'kind']],
         'text-size': 11,
         'text-offset': [0, 1.3],
         'text-anchor': 'top',
@@ -121,7 +131,7 @@ export class ContactLayer {
       type: 'symbol',
       source: SRC_ACTIVE,
       layout: {
-        'text-field': ['get', 'label'],
+        'text-field': ['get', 'kind'],
         'text-size': 8,
         'text-offset': [0, 2.6],
         'text-anchor': 'top',
@@ -166,7 +176,7 @@ export class ContactLayer {
       source: SRC_GHOST,
       layout: {
         'text-field': ['format',
-          ['coalesce', ['get', 'nato_id'], '?'], {},
+          ['coalesce', ['get', 'display_id'], 'Ultimo avvistamento'], {},
           '\n', {},
           ['get', 'time_ago'], { 'font-scale': 0.82 },
         ],
@@ -216,7 +226,7 @@ export class ContactLayer {
       type: 'symbol',
       source: SRC_GOD,
       layout: {
-        'text-field': ['get', 'label'],
+        'text-field': ['get', 'kind'],
         'text-size': 9,
         'text-offset': [0, 1.5],
         'text-anchor': 'top',
@@ -229,12 +239,12 @@ export class ContactLayer {
     })
   }
 
-  _assignNato(contact) {
-    this._natoCount += 1
-    const n = String(this._natoCount).padStart(3, '0')
-    if (contact.flagged) return `TGT-${n}`
-    if (contact.mmsi)    return `AIS-${n}`
-    return `UNK-${n}`
+  _assignDisplayId(contact) {
+    this._trackCount += 1
+    const n = String(this._trackCount).padStart(2, '0')
+    if (contact.label === 'BUOY') return `Boa ${n}`
+    if (contact.flagged || contact.label === 'UNKNOWN') return `Sospetto ${n}`
+    return `Contatto ${n}`
   }
 
   /** Cache the latest data-rate snapshot; detection happens in renderFrame(). */
@@ -267,9 +277,9 @@ export class ContactLayer {
 
       if (detected) {
         if (!track) {
-          // NEW detection → assign NATO id + fire red ping
+          // NEW detection → assign a spectator-friendly track label + fire ping.
           track = {
-            natoId: this._assignNato(c),
+            displayId: this._assignDisplayId(c),
             firstSeen: now,
             lastSeen: now,
             lastPos: { lon: c.position.lon, lat: c.position.lat },
@@ -285,7 +295,8 @@ export class ContactLayer {
           geometry: { type: 'Point', coordinates: [c.position.lon, c.position.lat] },
           properties: {
             id: c.id, label: c.label, flagged: !!c.flagged,
-            nato_id: track.natoId,
+            display_id: track.displayId,
+            kind: contactKind(c),
           },
         })
       } else if (godView) {
@@ -296,7 +307,9 @@ export class ContactLayer {
           geometry: { type: 'Point', coordinates: [c.position.lon, c.position.lat] },
           properties: {
             id: c.id,
-            label: track ? track.natoId : c.label,
+            display_id: track?.displayId,
+            kind: contactKind(c),
+            label: c.label,
             flagged: !!c.flagged,
           },
         })
@@ -307,7 +320,8 @@ export class ContactLayer {
           geometry: { type: 'Point', coordinates: [track.lastPos.lon, track.lastPos.lat] },
           properties: {
             id: c.id, label: c.label, flagged: !!c.flagged,
-            nato_id: track.natoId,
+            display_id: track.displayId,
+            kind: contactKind(c),
             time_ago: timeAgo(now - track.lastSeen),
           },
         })

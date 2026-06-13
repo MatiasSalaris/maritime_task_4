@@ -9,24 +9,24 @@
     if (running) return
     runner  = new DemoRunner()
     running = true
-    progress = 'Connecting agents…'
+    progress = 'Connessione agenti...'
 
     try {
       await runner.start()
-      progress = 'Demo running…'
+      progress = 'Demo in esecuzione...'
 
       // Poll running state to detect auto-stop
       const poll = setInterval(() => {
         if (!runner?.running) {
           clearInterval(poll)
           running  = false
-          progress = 'Demo complete'
+          progress = 'Demo completata'
           setTimeout(() => (progress = ''), 3000)
           runner = null
         }
       }, 500)
     } catch (e) {
-      progress = 'Error: backend not reachable'
+      progress = 'Errore: backend non raggiungibile'
       running = false
       runner  = null
     }
@@ -48,12 +48,12 @@
     runner   = null
     running  = false
     resetting = true
-    progress = 'Resetting…'
+    progress = 'Reset in corso...'
     try {
       await fetch('/api/reset', { method: 'POST' })
-      progress = 'Reset — issue a mission to start a fresh run'
+      progress = 'Reset completato: invia una missione per ripartire'
     } catch (e) {
-      progress = 'Reset failed: backend unreachable'
+      progress = 'Reset fallito: backend non raggiungibile'
     } finally {
       resetting = false
       setTimeout(() => (progress = ''), 3500)
@@ -64,11 +64,11 @@
 <div class="demo-bar">
   {#if !running}
     <button class="btn start" on:click={startDemo}>
-      ▶ Start Demo
+      ▶ Avvia demo
     </button>
   {:else}
     <button class="btn stop" on:click={stopDemo}>
-      ■ Stop Demo
+      ■ Ferma demo
     </button>
   {/if}
 
@@ -76,7 +76,7 @@
     class="btn reset"
     on:click={resetAll}
     disabled={resetting}
-    title="Stop everything and restart from a clean state"
+    title="Ferma tutto e riavvia da uno stato pulito"
   >
     ⟲ Reset
   </button>

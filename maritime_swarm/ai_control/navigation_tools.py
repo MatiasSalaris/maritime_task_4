@@ -36,6 +36,7 @@ from maritime_swarm.ai_control.tools import (
 )
 
 _M_PER_DEG_LAT = 111_320.0
+_KM_PER_DEG_LAT = 111.32
 
 
 # ── grounding helpers ─────────────────────────────────────────────────────────
@@ -73,6 +74,79 @@ def _stop(task: str) -> dict[str, Any]:
     return {"speed_kn": 0.0, "planned_path": [], "current_task": task}
 
 
+def _auto_search_box(ctx: ToolContext, sector: str) -> tuple[float, float, float, float]:
+    if ctx.bounds is None:
+        raise ToolError("search_area needs operating-area bounds")
+    b = ctx.bounds
+    sec = (sector or "AUTO").upper()
+    if sec in coord.SECTORS:
+        return coord.sector_box(b, sec)
+    if sec == "ALL":
+        return (b.lat_min, b.lat_max, b.lon_min, b.lon_max)
+    if sec == "AUTO":
+        # Three-agent demo split: agent_0=west, agent_1=center, agent_2=east.
+        idx = next((int(ch) for ch in reversed(ctx.agent_id) if ch.isdigit()), 0) % 3
+        width = (b.lon_max - b.lon_min) / 3.0
+        lo_lon = b.lon_min + idx * width
+        hi_lon = b.lon_min + (idx + 1) * width
+        return (b.lat_min, b.lat_max, lo_lon, hi_lon)
+    if sec == "WEST":
+        mid = (b.lon_min + b.lon_max) / 2
+        return (b.lat_min, b.lat_max, b.lon_min, mid)
+    if sec == "EAST":
+        mid = (b.lon_min + b.lon_max) / 2
+        return (b.lat_min, b.lat_max, mid, b.lon_max)
+    raise ToolError("search_area sector must be AUTO, ALL, WEST, EAST, NW, NE, SW, SE or CENTER")
+
+
+def _search_area_label(ctx: ToolContext, sector: str) -> str:
+    sec = (sector or "AUTO").upper()
+    if sec == "AUTO":
+        idx = next((int(ch) for ch in reversed(ctx.agent_id) if ch.isdigit()), 0) % 3
+        return ["area ovest", "area centrale", "area est"][idx]
+    if sec == "ALL":
+        return "tutta l’area"
+    return f"settore {sec}"
+
+
+def _lawnmower_waypoints(
+    box: tuple[float, float, float, float],
+    spacing_km: float,
+    start_lat: float,
+    start_lon: float,
+) -> list[tuple[float, float]]:
+    lo_lat, hi_lat, lo_lon, hi_lon = box
+    pad_lat = max((hi_lat - lo_lat) * 0.03, 0.001)
+    pad_lon = max((hi_lon - lo_lon) * 0.03, 0.001)
+    lo_lat += pad_lat; hi_lat -= pad_lat
+    lo_lon += pad_lon; hi_lon -= pad_lon
+    if lo_lat >= hi_lat or lo_lon >= hi_lon:
+        return [((lo_lat + hi_lat) / 2, (lo_lon + hi_lon) / 2)]
+
+    midlat = (lo_lat + hi_lat) / 2
+    km_per_deg_lon = max(20.0, _KM_PER_DEG_LAT * math.cos(math.radians(midlat)))
+    step_lon = max(0.001, spacing_km / km_per_deg_lon)
+
+    lons: list[float] = []
+    lon = lo_lon
+    while lon <= hi_lon:
+        lons.append(lon)
+        lon += step_lon
+    if not lons or (hi_lon - lons[-1]) * km_per_deg_lon > spacing_km * 0.35:
+        lons.append(hi_lon)
+
+    points: list[tuple[float, float]] = []
+    for i, col_lon in enumerate(lons):
+        if i % 2 == 0:
+            points.extend([(lo_lat, col_lon), (hi_lat, col_lon)])
+        else:
+            points.extend([(hi_lat, col_lon), (lo_lat, col_lon)])
+
+    if points and haversine_km(start_lat, start_lon, *points[-1]) < haversine_km(start_lat, start_lon, *points[0]):
+        points.reverse()
+    return points
+
+
 # ── go_to (raw waypoint) ───────────────────────────────────────────────────────
 class GoToTool(Tool):
     name = "go_to"
@@ -95,9 +169,9 @@ class GoToTool(Tool):
     def step(self, obs: Observation, ctx: ToolContext) -> ToolInvocation:
         dist = haversine_km(obs.lat, obs.lon, self.lat, self.lon)
         if dist <= ctx.arrival_km:
-            return ToolInvocation(_stop(f"On station @ {self.lat:.3f}, {self.lon:.3f}"), ToolStatus.DONE, "arrived")
+            return ToolInvocation(_stop(f"In posizione @ {self.lat:.3f}, {self.lon:.3f}"), ToolStatus.DONE, "arrived")
         return ToolInvocation(
-            _steer(obs, self.lat, self.lon, ctx, f"Transit to {self.lat:.3f}, {self.lon:.3f} ({dist:.1f} km)"),
+            _steer(obs, self.lat, self.lon, ctx, f"Vai a {self.lat:.3f}, {self.lon:.3f} ({dist:.1f} km)"),
             ToolStatus.RUNNING, f"{dist:.2f} km",
         )
 
@@ -139,9 +213,9 @@ class MoveTool(Tool):
     def step(self, obs: Observation, ctx: ToolContext) -> ToolInvocation:
         dist = haversine_km(obs.lat, obs.lon, self.lat, self.lon)
         if dist <= ctx.arrival_km:
-            return ToolInvocation(_stop(f"On station @ {self.lat:.3f}, {self.lon:.3f}"), ToolStatus.DONE, "arrived")
+            return ToolInvocation(_stop(f"In posizione @ {self.lat:.3f}, {self.lon:.3f}"), ToolStatus.DONE, "arrived")
         return ToolInvocation(
-            _steer(obs, self.lat, self.lon, ctx, f"Proceeding {self._label} → {self.lat:.3f}, {self.lon:.3f}"),
+            _steer(obs, self.lat, self.lon, ctx, f"Procedo {self._label} -> {self.lat:.3f}, {self.lon:.3f}"),
             ToolStatus.RUNNING, f"{dist:.2f} km")
 
     def describe(self) -> str:
@@ -170,9 +244,9 @@ class GoToPoiTool(Tool):
     def step(self, obs: Observation, ctx: ToolContext) -> ToolInvocation:
         dist = haversine_km(obs.lat, obs.lon, self.lat, self.lon)
         if dist <= ctx.arrival_km:
-            return ToolInvocation(_stop(f"On station @ {self.poi_id}"), ToolStatus.DONE, "arrived")
+            return ToolInvocation(_stop(f"In posizione @ {self.poi_id}"), ToolStatus.DONE, "arrived")
         return ToolInvocation(
-            _steer(obs, self.lat, self.lon, ctx, f"Transit to {self.poi_id} ({dist:.1f} km)"),
+            _steer(obs, self.lat, self.lon, ctx, f"Vai a {self.poi_id} ({dist:.1f} km)"),
             ToolStatus.RUNNING, f"{dist:.2f} km",
         )
 
@@ -191,6 +265,7 @@ class PatrolSectorTool(Tool):
     def __init__(self, sector: str) -> None:
         self.sector = sector
         self._waypoints: list[tuple[float, float]] = []
+        self._bounds_key: tuple[float, float, float, float] | None = None
         self._idx = 0
 
     @classmethod
@@ -201,24 +276,130 @@ class PatrolSectorTool(Tool):
         return cls(sec)
 
     def _ensure_wp(self, ctx: ToolContext) -> None:
-        if not self._waypoints and ctx.bounds is not None:
+        if ctx.bounds is None:
+            return
+        key = (
+            round(ctx.bounds.lat_min, 7),
+            round(ctx.bounds.lat_max, 7),
+            round(ctx.bounds.lon_min, 7),
+            round(ctx.bounds.lon_max, 7),
+        )
+        if key != self._bounds_key:
+            self._bounds_key = key
             self._waypoints = coord.sector_waypoints(ctx.bounds, self.sector)
+            self._idx = 0
 
     def step(self, obs: Observation, ctx: ToolContext) -> ToolInvocation:
         self._ensure_wp(ctx)
         if not self._waypoints:
-            return ToolInvocation(_stop(f"Patrolling {self.sector}"), ToolStatus.RUNNING, "no bounds")
+            return ToolInvocation(_stop(f"Pattuglia {self.sector}"), ToolStatus.RUNNING, "no bounds")
         tlat, tlon = self._waypoints[self._idx % len(self._waypoints)]
         if haversine_km(obs.lat, obs.lon, tlat, tlon) <= ctx.arrival_km:
             self._idx += 1
             tlat, tlon = self._waypoints[self._idx % len(self._waypoints)]
         return ToolInvocation(
-            _steer(obs, tlat, tlon, ctx, f"Patrolling sector {self.sector}"),
+            _steer(obs, tlat, tlon, ctx, f"Pattuglia settore {self.sector}"),
             ToolStatus.RUNNING, f"leg {self._idx % len(self._waypoints)}",
         )
 
     def describe(self) -> str:
         return f"patrol_sector({self.sector})"
+
+
+# ── search_area (coverage search) ─────────────────────────────────────────────
+class SearchAreaTool(Tool):
+    name = "search_area"
+    description = (
+        "coverage search using a deterministic lawn-mower pattern inside the operating area. "
+        "Use for finding a missing buoy or unknown object; sector AUTO splits the AOR among agents."
+    )
+    parameters = {
+        "sector": {
+            "type": "string",
+            "description": "AUTO, ALL, WEST, EAST, NW, NE, SW, SE or CENTER. AUTO gives each agent a different strip.",
+            "required": False,
+        },
+        "spacing_km": {
+            "type": "number",
+            "description": "distance between sweep lines. Omit to use sensor range with overlap.",
+            "required": False,
+        },
+        "priority": {
+            "type": "string",
+            "description": "coverage for dense overlap, speed for fewer wider sweep lines, balanced by default.",
+            "required": False,
+        },
+    }
+
+    def __init__(self, sector: str, spacing_km: float | None = None, priority: str = "balanced") -> None:
+        self.sector = sector.upper()
+        self.spacing_km = spacing_km
+        self.priority = priority.lower().strip() or "balanced"
+        self._waypoints: list[tuple[float, float]] = []
+        self._key: tuple[Any, ...] | None = None
+        self._idx = 0
+
+    @classmethod
+    def build(cls, args: dict[str, Any], ctx: ToolContext) -> "SearchAreaTool":
+        sector = str(args.get("sector") or "AUTO").upper().strip()
+        spacing = args.get("spacing_km")
+        spacing_km = None if spacing is None else max(0.3, min(20.0, float(spacing)))
+        priority = str(args.get("priority") or "balanced").lower().strip()
+        if priority not in {"speed", "coverage", "balanced"}:
+            priority = "balanced"
+        _auto_search_box(ctx, sector)  # validate sector/bounds now, not after build
+        return cls(sector, spacing_km, priority)
+
+    def _effective_spacing(self, ctx: ToolContext) -> float:
+        if self.spacing_km is not None:
+            return self.spacing_km
+        # Swath width is roughly 2R. Coverage overlaps more; speed accepts a
+        # coarser first pass so the target is found quickly in the demo.
+        factor = {"coverage": 0.9, "balanced": 1.4, "speed": 1.9}.get(self.priority, 1.4)
+        return max(0.4, min(20.0, ctx.sensor_range_km * factor))
+
+    def _ensure_plan(self, obs: Observation, ctx: ToolContext) -> None:
+        if ctx.bounds is None:
+            return
+        spacing = self._effective_spacing(ctx)
+        box = _auto_search_box(ctx, self.sector)
+        key = (
+            self.sector,
+            self.priority,
+            round(spacing, 3),
+            round(box[0], 7), round(box[1], 7), round(box[2], 7), round(box[3], 7),
+        )
+        if key == self._key:
+            return
+        self._key = key
+        self._waypoints = _lawnmower_waypoints(box, spacing, obs.lat, obs.lon)
+        self._idx = 0
+
+    def step(self, obs: Observation, ctx: ToolContext) -> ToolInvocation:
+        self._ensure_plan(obs, ctx)
+        if not self._waypoints:
+            return ToolInvocation(_stop("Ricerca area: nessun waypoint"), ToolStatus.FAILED, "no plan")
+
+        while self._idx < len(self._waypoints):
+            tlat, tlon = self._waypoints[self._idx]
+            if haversine_km(obs.lat, obs.lon, tlat, tlon) > ctx.arrival_km:
+                break
+            self._idx += 1
+
+        if self._idx >= len(self._waypoints):
+            return ToolInvocation(_stop(f"Ricerca completata {self.sector}"), ToolStatus.DONE, "complete")
+
+        tlat, tlon = self._waypoints[self._idx]
+        remaining = [{"lat": lat, "lon": lon} for lat, lon in self._waypoints[self._idx:self._idx + 24]]
+        return ToolInvocation({
+            "heading": bearing_deg(obs.lat, obs.lon, tlat, tlon),
+            "speed_kn": ctx.cruise_speed_kn,
+            "planned_path": remaining,
+            "current_task": f"Ricerca {_search_area_label(ctx, self.sector)} priorità {self.priority} passaggio {self._idx + 1}/{len(self._waypoints)}",
+        }, ToolStatus.RUNNING, f"line {self._idx + 1}/{len(self._waypoints)}")
+
+    def describe(self) -> str:
+        return f"search_area({self.sector}, {self.priority})"
 
 
 # ── investigate_contact (reactive) ─────────────────────────────────────────────
@@ -250,9 +431,9 @@ class InvestigateContactTool(Tool):
         dist = haversine_km(obs.lat, obs.lon, tlat, tlon)
         if dist <= max(ctx.arrival_km, ctx.identify_km):
             # Close enough for the sensor to identify it — no need to physically touch it.
-            return ToolInvocation(_stop(f"Identified {self.contact_id}"), ToolStatus.DONE, "identified")
+            return ToolInvocation(_stop(f"Identificato {self.contact_id}"), ToolStatus.DONE, "identified")
         return ToolInvocation(
-            _steer(obs, tlat, tlon, ctx, f"Intercepting {self.contact_id} ({dist:.1f} km)"),
+            _steer(obs, tlat, tlon, ctx, f"Ispeziona {self.contact_id} ({dist:.1f} km)"),
             ToolStatus.RUNNING, f"{dist:.2f} km",
         )
 
@@ -307,7 +488,7 @@ class ReportContactTool(Tool):
             "reasoning": f"{self.contact_id}: {self.classification} — {self.rationale}",
         }
         return ToolInvocation(
-            _stop(f"Reported {self.contact_id} ({self.classification})"),
+            _stop(f"Segnalato {self.contact_id} ({self.classification})"),
             ToolStatus.DONE, "reported", p2p=p2p,
         )
 
@@ -356,9 +537,9 @@ class EscortContactTool(Tool):
             return ToolInvocation(None, ToolStatus.FAILED, f"lost {self.contact_id}")
         slat, slon = self._station(*self._last)
         dist = haversine_km(obs.lat, obs.lon, slat, slon)
-        task = f"Escorting {self.contact_id} @ {int(self.standoff_m)}m / {int(self.bearing_deg)}°"
+        task = f"Segue {self.contact_id} @ {int(self.standoff_m)}m / {int(self.bearing_deg)}°"
         if dist <= ctx.arrival_km:
-            return ToolInvocation(_stop(task + " (on station)"), ToolStatus.RUNNING, "on station")
+            return ToolInvocation(_stop(task + " (in posizione)"), ToolStatus.RUNNING, "on station")
         return ToolInvocation(_steer(obs, slat, slon, ctx, task), ToolStatus.RUNNING, f"{dist:.2f} km to station")
 
     def describe(self) -> str:
@@ -404,16 +585,16 @@ class VisitPoisTool(Tool):
     def step(self, obs: Observation, ctx: ToolContext) -> ToolInvocation:
         seq = list(self.poi_ids) + ([self.rendezvous] if self.rendezvous else [])
         if self._idx >= len(seq):
-            return ToolInvocation(_stop("Sequence complete — holding"), ToolStatus.RUNNING, "done")
+            return ToolInvocation(_stop("Sequenza completata: mantengo posizione"), ToolStatus.RUNNING, "done")
         target_id = seq[self._idx]
         tlat, tlon = self.points[target_id]
         dist = haversine_km(obs.lat, obs.lon, tlat, tlon)
         if dist <= ctx.arrival_km:
             self._idx += 1
-            label = "Rendezvous reached" if (self.rendezvous and self._idx >= len(seq)) else f"Reached {target_id}"
+            label = "Rendezvous raggiunto" if (self.rendezvous and self._idx >= len(seq)) else f"Raggiunto {target_id}"
             return ToolInvocation(_stop(label), ToolStatus.RUNNING, f"reached {target_id}")
         last = self._idx == len(seq) - 1 and self.rendezvous
-        verb = "Rendezvous at" if last else "Visiting"
+        verb = "Rendezvous a" if last else "Visita"
         return ToolInvocation(
             _steer(obs, tlat, tlon, ctx, f"{verb} {target_id} ({dist:.1f} km)"),
             ToolStatus.RUNNING, f"{dist:.2f} km",
@@ -445,9 +626,9 @@ class RendezvousTool(Tool):
     def step(self, obs: Observation, ctx: ToolContext) -> ToolInvocation:
         dist = haversine_km(obs.lat, obs.lon, self.lat, self.lon)
         if dist <= ctx.arrival_km:
-            return ToolInvocation(_stop(f"At rendezvous {self.poi_id}"), ToolStatus.RUNNING, "arrived")
+            return ToolInvocation(_stop(f"Al rendezvous {self.poi_id}"), ToolStatus.RUNNING, "arrived")
         return ToolInvocation(
-            _steer(obs, self.lat, self.lon, ctx, f"Rendezvous at {self.poi_id} ({dist:.1f} km)"),
+            _steer(obs, self.lat, self.lon, ctx, f"Rendezvous a {self.poi_id} ({dist:.1f} km)"),
             ToolStatus.RUNNING, f"{dist:.2f} km",
         )
 
@@ -479,20 +660,25 @@ class HoldPositionTool(Tool):
             self._start = obs.world_time
         elapsed = obs.world_time - self._start
         if elapsed >= self.seconds:
-            return ToolInvocation(_stop("Hold complete"), ToolStatus.DONE, "elapsed")
-        return ToolInvocation(_stop(f"Holding ({int(self.seconds - elapsed)}s)"), ToolStatus.RUNNING, "holding")
+            return ToolInvocation(_stop("Attesa completata"), ToolStatus.DONE, "elapsed")
+        return ToolInvocation(_stop(f"In attesa ({int(self.seconds - elapsed)}s)"), ToolStatus.RUNNING, "holding")
 
     def describe(self) -> str:
         return f"hold_position({self.seconds:.0f}s)"
 
 
 def default_registry() -> ToolRegistry:
-    """The full maritime toolset (covers patrol/report, escort, search & rendezvous)."""
+    """Default tools for the live buoy-search demo.
+
+    POI/rendezvous tools are intentionally not exposed here: the current
+    scenario has no operator-defined POIs, and listing those tools encourages
+    the LLM to route to stale poi_1/poi_2/poi_3 waypoints instead of searching
+    the marked area.
+    """
     registry = ToolRegistry()
     for tool in (
-        GoToTool, MoveTool, GoToPoiTool, PatrolSectorTool, InvestigateContactTool,
-        ReportContactTool, EscortContactTool, VisitPoisTool, RendezvousTool,
-        HoldPositionTool,
+        GoToTool, MoveTool, SearchAreaTool, PatrolSectorTool, InvestigateContactTool,
+        ReportContactTool, EscortContactTool, HoldPositionTool,
     ):
         registry.register(tool)
     return registry

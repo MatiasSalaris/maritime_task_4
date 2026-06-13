@@ -48,6 +48,9 @@ class WorldModelClient:
             }
         )
 
+    async def send_mission_complete(self, result: dict[str, Any]) -> None:
+        await self._send({"type": "mission_complete", "payload": {"result": result}})
+
     async def _send(self, message: dict[str, Any]) -> None:
         if self._ws is None:
             raise RuntimeError("client not connected")

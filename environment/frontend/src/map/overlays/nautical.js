@@ -1,7 +1,7 @@
 // Classic nautical chart — OSM tiles darkened for tactical contrast
 export const nautical = {
   id: 'nautical',
-  label: 'Nautical',
+  label: 'Nautica',
   style: {
     version: 8,
     sources: {

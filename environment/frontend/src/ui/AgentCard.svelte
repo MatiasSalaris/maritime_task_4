@@ -8,9 +8,10 @@
 
   const MSG_ICON  = { proposal: '◆', ack: '✓', objection: '✕', handoff: '→', report: '⚑', status: '●' }
   const MSG_COLOR = { proposal: '#00d4ff', ack: '#00ff88', objection: '#ff3355', handoff: '#ffaa00', report: '#ff8800', status: '#6a8a9a' }
+  const MSG_LABEL = { proposal: 'proposta', ack: 'conferma', objection: 'obiezione', handoff: 'passaggio', report: 'rapporto', status: 'stato' }
 
   function agentName(id) {
-    if (id === 'all') return 'ALL'
+    if (id === 'all') return 'TUTTI'
     return $worldState.agents?.find(a => a.id === id)?.name ?? id
   }
 
@@ -22,9 +23,9 @@
     : []
 
   const STATUS_LABEL = {
-    operational: '● OPERATIONAL',
-    degraded:    '◐ DEGRADED',
-    silent:      '○ SILENT',
+    operational: '● OPERATIVO',
+    degraded:    '◐ DEGRADATO',
+    silent:      '○ SILENZIOSO',
   }
   const STATUS_COLOR = {
     operational: '#00ff88',
@@ -33,8 +34,8 @@
   }
 
   const TYPE_META = {
-    USV: { label: '⛵ SURFACE', bg: '#001a2e', border: '#0055aa', text: '#4499dd' },
-    UAV: { label: '✈ AERIAL',  bg: '#1a001a', border: '#8800cc', text: '#cc66ff' },
+    USV: { label: '⛵ SUPERFICIE', bg: '#001a2e', border: '#0055aa', text: '#4499dd' },
+    UAV: { label: '✈ AEREO',      bg: '#1a001a', border: '#8800cc', text: '#cc66ff' },
   }
 
   $: color      = agentColor(agent.id)
@@ -42,7 +43,7 @@
   $: statusClr  = STATUS_COLOR[agent.status]  ?? '#ffffff'
   $: tag        = actionTag(agent.current_task)
   $: typeMeta   = TYPE_META[(agent.type ?? '').toUpperCase()] ?? TYPE_META.USV
-  $: summary    = agentDecisionSummary(agent, $worldState.message_log)
+  $: summary    = agentDecisionSummary(agent, $worldState.message_log, { compact: !selected })
   $: taskText   = shortText(summary.decision, 86)
 
   function fmt(n) { return n?.toFixed(1) ?? '—' }
@@ -70,7 +71,7 @@
         {typeMeta.label}
       </span>
       {#if agent.connected}
-        <span class="connected-badge">AI</span>
+        <span class="connected-badge">IA</span>
       {/if}
     </div>
     <span class="status" style="color:{statusClr}">{statusText}</span>
@@ -95,15 +96,15 @@
   {#if selected}
     <div class="reasoning-card">
       <div class="reason-row">
-        <span class="reason-label">Decision</span>
+        <span class="reason-label">Decisione</span>
         <span class="reason-text primary-text">{summary.decision}</span>
       </div>
       <div class="reason-row">
-        <span class="reason-label">Why</span>
+        <span class="reason-label">Motivo</span>
         <span class="reason-text">{summary.why}</span>
       </div>
       <div class="reason-row">
-        <span class="reason-label">Coordination</span>
+        <span class="reason-label">Coord.</span>
         <span class="reason-text">{summary.coordination}</span>
       </div>
     </div>
@@ -111,21 +112,21 @@
 
   {#if selected}
     <div class="comms">
-      <div class="detail-title">Recent messages</div>
+      <div class="detail-title">Messaggi recenti</div>
       {#if comms.length}
         <div class="comms-list">
           {#each comms as m (m.id)}
             <div class="cmsg">
-              <span class="cdir">{m.from_agent === agent.id ? '▶ sent' : '◀ recv'}</span>
+              <span class="cdir">{m.from_agent === agent.id ? '▶ inviato' : '◀ ricevuto'}</span>
               <span class="cicon" style="color:{MSG_COLOR[m.msg_type] ?? '#888'}">{MSG_ICON[m.msg_type] ?? '?'}</span>
               <span class="cpeer">{m.from_agent === agent.id ? agentName(m.to_agent) : agentName(m.from_agent)}</span>
-              <span class="ctype" style="color:{MSG_COLOR[m.msg_type] ?? '#888'}">{m.msg_type}</span>
-              {#if m.reasoning}<div class="ctext">{shortText(m.reasoning, 120)}</div>{/if}
+              <span class="ctype" style="color:{MSG_COLOR[m.msg_type] ?? '#888'}">{MSG_LABEL[m.msg_type] ?? m.msg_type}</span>
+              {#if m.reasoning}<div class="ctext">{m.reasoning}</div>{/if}
             </div>
           {/each}
         </div>
       {:else}
-        <div class="comms-empty">No messages yet.</div>
+        <div class="comms-empty">Nessun messaggio.</div>
       {/if}
     </div>
   {/if}
@@ -138,14 +139,14 @@
 
     <div class="controls">
       {#if agent.status !== 'silent'}
-        <button class="ctrl-btn danger" title="Simulate comms loss"
+        <button class="ctrl-btn danger" title="Simula perdita comunicazioni"
                 on:click|stopPropagation={() => forceStatus('silent')}>
-          Disconnect
+          Disconnetti
         </button>
       {:else}
         <button class="ctrl-btn ok"
                 on:click|stopPropagation={() => forceStatus('operational')}>
-          Reconnect
+          Riconnetti
         </button>
       {/if}
     </div>
@@ -228,6 +229,8 @@
     font-family: monospace;
     font-size: 12px;
     line-height: 1.4;
+    overflow-wrap: anywhere;
+    white-space: pre-wrap;
   }
   .primary-text { color: #e0f0ff; }
 
@@ -240,7 +243,7 @@
   .cpeer { color: #c8d8e8; font-weight: bold; }
   .ctype { color: #6a8a9a; margin-left: 5px; }
   .ctext { color: #9fc0d0; padding: 1px 0 2px 10px; border-left: 2px solid #15303f; margin-top: 2px;
-           white-space: pre-wrap; }
+           white-space: pre-wrap; overflow-wrap: anywhere; }
   .comms-empty { font-size: 11px; color: #3a5a7a; }
 
   .details {

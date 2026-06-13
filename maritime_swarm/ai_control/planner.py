@@ -22,6 +22,15 @@ logger = logging.getLogger(__name__)
 _MSG_TYPES = {"proposal", "ack", "objection", "handoff", "report", "status"}
 
 
+def _search_priority(mission: str | None) -> str:
+    text = (mission or "").lower()
+    if any(word in text for word in ("veloc", "speed", "rapido", "quick", "fast")):
+        return "speed"
+    if any(word in text for word in ("copertura", "coverage", "accurata", "dense", "completa")):
+        return "coverage"
+    return "balanced"
+
+
 def normalise_decision(raw: dict[str, Any]) -> dict[str, Any]:
     """Coerce an LLM response into {reasoning, messages, action}."""
     action = raw.get("action") or {}
@@ -95,17 +104,24 @@ class HeuristicDecider:
 
     def decide(self, obs, ctx, scene, mission, peers, shared_contacts, messages, current_task, registry,
                task_status="idle", silent_peers=None, outbox=None):
+        buoys = [c for c in obs.contacts if c.is_buoy]
+        if buoys:
+            nearest = min(buoys, key=lambda c: haversine_km(obs.lat, obs.lon, c.lat, c.lon))
+            return normalise_decision({
+                "reasoning": f"Boa dispersa {nearest.id} rilevata nel raggio sensore; mi avvicino per confermare la posizione.",
+                "messages": [{"to": "all", "type": "report", "content": f"Rilevata boa dispersa {nearest.id}."}],
+                "action": {"tool": "investigate_contact", "args": {"contact_id": nearest.id}},
+            })
         susp = [c for c in obs.contacts if c.is_suspicious]
         if susp:
             nearest = min(susp, key=lambda c: haversine_km(obs.lat, obs.lon, c.lat, c.lon))
             return normalise_decision({
-                "reasoning": f"Suspicious contact {nearest.id} in range; closing to identify.",
-                "messages": [{"to": "all", "type": "status", "content": f"Investigating {nearest.id}."}],
+                "reasoning": f"Contatto sospetto {nearest.id} nel raggio sensore; mi avvicino per identificarlo.",
+                "messages": [{"to": "all", "type": "status", "content": f"Ispeziono {nearest.id}."}],
                 "action": {"tool": "investigate_contact", "args": {"contact_id": nearest.id}},
             })
-        idx = sum(ord(ch) for ch in ctx.agent_id) % len(self._SECTORS)
         return normalise_decision({
-            "reasoning": "No contacts of interest; patrolling my sector for coverage.",
+            "reasoning": f"Nessun contatto rilevato; eseguo una ricerca a strisce con priorità {_search_priority(mission)} nella mia fascia automatica dell’AOR.",
             "messages": [],
-            "action": {"tool": "patrol_sector", "args": {"sector": self._SECTORS[idx]}},
+            "action": {"tool": "search_area", "args": {"sector": "AUTO", "priority": _search_priority(mission)}},
         })

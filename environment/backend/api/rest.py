@@ -11,8 +11,17 @@ class MissionPayload(BaseModel):
     text: str
 
 
+class MissionCompletePayload(BaseModel):
+    result: dict
+
+
 class AgentStatusPayload(BaseModel):
     status: str  # "operational" | "degraded" | "silent"
+
+
+class ContactPositionPayload(BaseModel):
+    lat: float
+    lon: float
 
 
 @router.post("/mission")
@@ -26,6 +35,12 @@ async def change_mission(body: MissionPayload) -> dict:
     """Mid-mission intent change — same as set_mission but semantically distinct."""
     await app_state.engine.provider.set_mission(body.text)
     return {"ok": True, "mission": body.text}
+
+
+@router.post("/mission/complete")
+async def complete_mission(body: MissionCompletePayload) -> dict:
+    await app_state.engine.provider.complete_mission(body.result)
+    return {"ok": True, "mission_status": "completed", "result": body.result}
 
 
 @router.get("/state")
@@ -57,6 +72,14 @@ async def set_doctrine(body: DoctrinePayload) -> dict:
 async def set_aor(body: AORPayload) -> dict:
     await app_state.engine.provider.set_aor(body.geometry)
     return {"ok": True}
+
+
+@router.post("/contacts/{contact_id}/position")
+async def set_contact_position(contact_id: str, body: ContactPositionPayload) -> dict:
+    ok = await app_state.engine.provider.set_contact_position(contact_id, body.lat, body.lon)
+    if not ok:
+        raise HTTPException(status_code=404, detail=f"Contact {contact_id} not found")
+    return {"ok": True, "contact_id": contact_id, "lat": body.lat, "lon": body.lon}
 
 
 @router.post("/reset")

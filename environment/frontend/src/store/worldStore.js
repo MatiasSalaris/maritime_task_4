@@ -9,6 +9,8 @@ export const worldState = writable({
   messages_in_flight: [],
   message_log: [],
   mission: null,
+  mission_status: 'idle',
+  mission_result: null,
   doctrine: null,
   aor: null,
 })
@@ -33,12 +35,15 @@ export function agentColor(id) {
 // Keeps the "what is it doing right now" legible at a glance in the bubble/card.
 export function actionTag(task) {
   const t = (task ?? '').toLowerCase()
-  if (!t)                                               return { label: 'STANDBY',     color: '#6a8a9a' }
-  if (t.startsWith('idle'))                             return { label: 'IDLE',        color: '#6a8a9a' }
-  if (t.includes('hold'))                               return { label: 'HOLD',        color: '#ffaa00' }
-  if (t.includes('intercept') || t.includes('identif')) return { label: 'INVESTIGATE', color: '#ff5a3c' }
-  if (t.includes('on station'))                         return { label: 'ON STATION',  color: '#00ff88' }
-  if (t.includes('transit') || t.includes('patrol') || t.includes('sweep'))
-                                                        return { label: 'TRANSIT',     color: '#00d4ff' }
-  return { label: 'ACTIVE', color: '#00d4ff' }
+  if (!t)                                               return { label: 'ATTESA',      color: '#6a8a9a' }
+  if (t.startsWith('idle'))                             return { label: 'IN ATTESA',   color: '#6a8a9a' }
+  if (t.includes('hold') || t.includes('attesa'))       return { label: 'FERMO',       color: '#ffaa00' }
+  if (t.includes('intercept') || t.includes('identif') || t.includes('ispeziona'))
+                                                        return { label: 'ISPEZIONE',   color: '#ff5a3c' }
+  if (t.includes('on station'))                         return { label: 'IN POSIZIONE', color: '#00ff88' }
+  if (t.includes('ricerca'))                            return { label: 'RICERCA',     color: '#00d4ff' }
+  if (t.includes('transit') || t.includes('patrol') || t.includes('sweep') ||
+      t.includes('pattuglia') || t.includes('vai a') || t.includes('procedo'))
+                                                        return { label: 'IN MOVIMENTO', color: '#00d4ff' }
+  return { label: 'ATTIVO', color: '#00d4ff' }
 }

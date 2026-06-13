@@ -49,6 +49,8 @@ class WorldState(BaseModel):
     messages_in_flight: list[dict] = []
     message_log: list[dict] = []
     mission: Optional[str] = None
+    mission_status: str = "idle"          # idle | active | completed
+    mission_result: Optional[dict] = None
     doctrine: Optional[str] = None   # NATO phase code: PHASE0..PHASE3 or MSO
     aor: Optional[dict] = None       # GeoJSON Polygon for operating area
     sensor_footprints: dict[str, list] = {}   # agent_id → [[lon,lat],...] polygon

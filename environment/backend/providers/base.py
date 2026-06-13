@@ -34,6 +34,14 @@ class AbstractPlatformProvider(ABC):
         """Propagate a new (or changed) mission intent."""
         ...
 
+    async def complete_mission(self, result: dict) -> None:
+        """Mark the current mission complete with a structured result."""
+        ...
+
+    async def set_contact_position(self, contact_id: str, lat: float, lon: float) -> bool:
+        """Move a simulated/contact target. Return False if the contact does not exist."""
+        return False
+
     @abstractmethod
     async def set_agent_connected(self, agent_id: str, connected: bool) -> None:
         """Mark whether an LLM agent WS is active."""

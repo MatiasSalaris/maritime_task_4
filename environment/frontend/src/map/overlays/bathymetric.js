@@ -1,7 +1,7 @@
 // Ocean depth — Stamen Watercolor darkened for ops readability
 export const bathymetric = {
   id: 'bathymetric',
-  label: 'Bathymetric',
+  label: 'Batimetrica',
   style: {
     version: 8,
     sources: {

@@ -56,6 +56,9 @@ class Bounds:
     def center(self) -> tuple[float, float]:
         return ((self.lat_min + self.lat_max) / 2, (self.lon_min + self.lon_max) / 2)
 
+    def contains_point(self, lat: float, lon: float) -> bool:
+        return self.lat_min <= lat <= self.lat_max and self.lon_min <= lon <= self.lon_max
+
 
 @dataclass
 class ToolContext:
@@ -71,6 +74,7 @@ class ToolContext:
     agent_name: str
     agent_type: str            # "USV" | "UAV"
     cruise_speed_kn: float
+    sensor_range_km: float = 4.0
     arrival_km: float = 0.3
     identify_km: float = 1.2   # range at which a contact is considered identified
     bounds: Bounds | None = None

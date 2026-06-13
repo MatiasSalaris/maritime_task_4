@@ -57,6 +57,7 @@ class AgentBrain:
         self.client = client
         self.ctx = ctx
         self.decider = decider
+        self.base_scene = scene
         self.scene = scene
         self.mission = (mission or "").strip() or None
         self.registry = registry
@@ -76,6 +77,8 @@ class AgentBrain:
         self._seen_contacts: set[str] = set()
         self._cooldown_until = 0.0   # set after a 429 to avoid hammering the API
         self._outbox: list[dict[str, Any]] = []   # recent messages we sent (own state)
+        self._aor_signature: str | None = None
+        self._mission_complete_contact: str | None = None
 
     # ── main loop ──────────────────────────────────────────────────────────
     async def run(self) -> None:
@@ -101,7 +104,9 @@ class AgentBrain:
     async def _on_observation(self, obs: Observation) -> None:
         self.ctx.obs = obs
         self.ctx.view = self.view
+        self._refresh_scene_from_observation(obs)
         self.ctx.scene = self.scene
+        self.ctx.bounds = self.scene.bounds
         self.view.tick(obs.world_time)
 
         # ingest peer traffic + our own sightings into the shared picture
@@ -118,6 +123,11 @@ class AgentBrain:
         if new_ids:
             self._seen_contacts |= new_ids
             self._dirty = True
+
+        if await self._maybe_stop_for_completed_mission(obs):
+            return
+        if await self._maybe_complete_buoy_mission(obs):
+            return
 
         # status heartbeat (always — keeps peer awareness alive even while idle)
         await self._maybe_broadcast_status(obs)
@@ -144,19 +154,128 @@ class AgentBrain:
         if incoming != (self.mission or ""):
             if incoming:
                 self.mission = incoming
+                self.active_tool = None
+                self._action_spec = None
+                self._current_task = "Ricalcolo missione"
                 self._dirty = True
+                self._last_decision = 0.0
                 self._outbox.clear()
+                self._mission_complete_contact = None
                 logger.info("[%s] new mission: %s", self.ctx.agent_id, incoming)
                 asyncio.create_task(self.client.send_cot(f"New mission — re-thinking: {incoming}\n"))
+                asyncio.create_task(self.client.send_action({
+                    "speed_kn": 0.0,
+                    "planned_path": [],
+                    "current_task": self._current_task,
+                }))
             else:
                 self.mission = None
                 self.active_tool = None
                 self._action_spec = None
+                self._mission_complete_contact = None
                 logger.info("[%s] mission cleared — holding.", self.ctx.agent_id)
                 asyncio.create_task(self.client.send_cot("Mission cleared — holding station.\n"))
                 asyncio.create_task(self.client.send_action(
                     {"speed_kn": 0.0, "planned_path": [], "current_task": "Idle — awaiting orders"}))
         return self.mission is not None
+
+    async def _maybe_stop_for_completed_mission(self, obs: Observation) -> bool:
+        if obs.mission_status != "completed":
+            return False
+        contact_id = str((obs.mission_result or {}).get("contact_id") or "target")
+        if self._mission_complete_contact == contact_id:
+            return True
+        self._mission_complete_contact = contact_id
+        self.active_tool = None
+        self._action_spec = None
+        self._dirty = False
+        self._current_task = f"Missione completata: boa {contact_id} trovata"
+        await self.client.send_action({
+            "speed_kn": 0.0,
+            "planned_path": [],
+            "current_task": self._current_task,
+        })
+        await self.client.send_cot(f"Missione completata: boa {contact_id} trovata.\n")
+        logger.info("[%s] mission already completed: %s", self.ctx.agent_id, contact_id)
+        return True
+
+    async def _maybe_complete_buoy_mission(self, obs: Observation) -> bool:
+        if not self.mission:
+            return False
+        mission_l = self.mission.lower()
+        if not any(word in mission_l for word in ("buoy", "boa")):
+            return False
+
+        contact_id = None
+        for c in obs.contacts:
+            if c.is_buoy:
+                contact_id = c.id
+                break
+        if contact_id is None:
+            for cid, sc in self.view.contacts.items():
+                if sc.label.upper() == "BUOY" or cid.lower().startswith("buoy"):
+                    contact_id = cid
+                    break
+        if contact_id is None:
+            return False
+
+        if self._mission_complete_contact == contact_id:
+            return True
+
+        own_contact = next((c for c in obs.contacts if c.id == contact_id), None)
+        shared_contact = self.view.contacts.get(contact_id)
+        lat = own_contact.lat if own_contact else (shared_contact.lat if shared_contact else obs.lat)
+        lon = own_contact.lon if own_contact else (shared_contact.lon if shared_contact else obs.lon)
+
+        self._mission_complete_contact = contact_id
+        self.active_tool = None
+        self._action_spec = None
+        self._dirty = False
+        self._current_task = f"Missione completata: boa {contact_id} trovata"
+        await self.client.send_action({
+            "speed_kn": 0.0,
+            "planned_path": [],
+            "current_task": self._current_task,
+        })
+        await self.client.send_p2p("all", "report", {
+            "text": f"Boa {contact_id} trovata. Interrompo la ricerca.",
+            "contacts": [{
+                "id": contact_id,
+                "lat": lat,
+                "lon": lon,
+                "label": "BUOY",
+                "reported": True,
+            }],
+        }, reasoning=f"Boa {contact_id} trovata: ricerca terminata per tutti gli agenti.")
+        if own_contact is not None:
+            await self.client.send_mission_complete({
+                "status": "success",
+                "reason": "missing_buoy_found",
+                "contact_id": contact_id,
+                "label": "BUOY",
+                "lat": lat,
+                "lon": lon,
+                "completed_by": self.ctx.agent_id,
+                "completed_by_name": self.ctx.agent_name,
+                "mission": self.mission,
+            })
+        await self.client.send_cot(f"Boa {contact_id} trovata: ricerca interrotta.\n")
+        logger.info("[%s] buoy mission complete: %s", self.ctx.agent_id, contact_id)
+        return True
+
+    def _refresh_scene_from_observation(self, obs: Observation) -> None:
+        sig = repr(obs.aor) if obs.aor else None
+        if sig == self._aor_signature:
+            return
+        self._aor_signature = sig
+        self.scene = self.base_scene.with_aor(obs.aor) if obs.aor else self.base_scene
+        self.ctx.bounds = self.scene.bounds
+        self.ctx.scene = self.scene
+        self._dirty = True
+        if obs.aor:
+            logger.info("[%s] selected AOR updated: lat %.3f..%.3f lon %.3f..%.3f",
+                        self.ctx.agent_id, self.scene.bounds.lat_min, self.scene.bounds.lat_max,
+                        self.scene.bounds.lon_min, self.scene.bounds.lon_max)
 
     # ── status ─────────────────────────────────────────────────────────────
     async def _maybe_broadcast_status(self, obs: Observation) -> None:

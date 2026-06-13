@@ -28,14 +28,15 @@ from maritime_swarm.ai_control.world_client import WorldModelClient
 
 logger = logging.getLogger(__name__)
 
-# Cruise speeds (knots) used by the tools when transiting. These are demo
-# parameters (the brief scores coordination, not flight dynamics) — fast enough
-# that an asset can actually run down a moving contact.
-_CRUISE_BY_TYPE = {"USV": 36.0, "UAV": 100.0}
+_DEMO_CRUISE_KN = 10_000.0
+
+# Cruise speeds (knots) used by the tools when transiting. These are deliberately
+# inflated by five orders of magnitude for fast simulation iteration.
+_CRUISE_BY_TYPE = {"USV": _DEMO_CRUISE_KN, "UAV": _DEMO_CRUISE_KN}
 
 
 def _cruise_for(agent_type: str) -> float:
-    return _CRUISE_BY_TYPE.get(agent_type.upper(), 30.0)
+    return _CRUISE_BY_TYPE.get(agent_type.upper(), _DEMO_CRUISE_KN)
 
 
 def _wait_for_backend(http_url: str, timeout_s: float = 120.0) -> None:
@@ -114,6 +115,7 @@ async def run_swarm(
             agent_name=a.get("name", a["id"]),
             agent_type=agent_type,
             cruise_speed_kn=_cruise_for(agent_type),
+            sensor_range_km=sensor_km,
             arrival_km=0.3,
             identify_km=max(0.8, 0.75 * sensor_km),
             bounds=scene.bounds,

@@ -24,12 +24,21 @@
     status:   '#666',
     report:   '#ff8800',
   }
+  const TYPE_LABEL = {
+    proposal: 'proposta',
+    ack:      'conferma',
+    objection:'obiezione',
+    handoff:  'passaggio',
+    status:   'stato',
+    report:   'rapporto',
+  }
 
   // Coordination + reports on the log; high-frequency 'status' heartbeats stay
   // off it (they still animate as packets on the map).
   $: visibleLog = ($worldState.message_log ?? []).filter(m => m.msg_type !== 'status')
 
   function agentName(id) {
+    if (id === 'all') return 'Tutti'
     const a = $worldState.agents?.find(a => a.id === id)
     return a?.name ?? id
   }
@@ -40,15 +49,10 @@
     return d.toTimeString().slice(0, 8)
   }
 
-  function shortText(value, max = 120) {
-    const text = (value ?? '').replace(/\s+/g, ' ').trim()
-    if (text.length <= max) return text
-    return text.slice(0, max - 1).trimEnd() + '…'
-  }
 </script>
 
 <div class="log-section">
-  <div class="title">MESSAGES</div>
+  <div class="title">MESSAGGI</div>
   <div class="log" bind:this={el}>
     {#each visibleLog as msg (msg.id)}
       <div class="entry">
@@ -59,14 +63,14 @@
         <span class="from" style="color:{agentColor(msg.from_agent)}">{agentName(msg.from_agent)}</span>
         <span class="arrow">→</span>
         <span class="to"   style="color:{agentColor(msg.to_agent)}">{agentName(msg.to_agent)}</span>
-        <span class="type" style="color:{TYPE_COLOR[msg.msg_type] ?? '#888'}">{msg.msg_type}</span>
+        <span class="type" style="color:{TYPE_COLOR[msg.msg_type] ?? '#888'}">{TYPE_LABEL[msg.msg_type] ?? msg.msg_type}</span>
       </div>
       {#if msg.reasoning}
-        <div class="reasoning">{shortText(msg.reasoning)}</div>
+        <div class="reasoning">{msg.reasoning}</div>
       {/if}
     {/each}
     {#if !visibleLog.length}
-      <div class="empty">Awaiting messages…</div>
+      <div class="empty">In attesa di messaggi...</div>
     {/if}
   </div>
 </div>
@@ -116,6 +120,8 @@
     border-left: 2px solid #1a3a5a;
     margin-left: 14px;
     margin-bottom: 2px;
+    white-space: pre-wrap;
+    overflow-wrap: anywhere;
   }
   .empty { font-size: 13px; color: #3a5a7a; text-align: center; padding: 24px; }
 </style>

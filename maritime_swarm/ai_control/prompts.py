@@ -29,12 +29,19 @@ def build_decision_system_prompt(registry: ToolRegistry) -> str:
         "Don't grab a shared task before agreeing, but act alone on what only you can do. If you and a "
         "peer want the same thing, the LOWER id keeps it and the other takes the complement. Respect "
         "commitments; cover a silent peer. Only use contact/POI ids shown to you — never invent ids.\n\n"
+        "Write the JSON fields `reasoning` and every message `content` in Italian. Keep tool names, "
+        "agent ids, contact ids, sector names and JSON keys unchanged.\n\n"
+        "For missions like finding a missing buoy/object in an area, prefer search_area({\"sector\":\"AUTO\"}) "
+        "until a real contact id is sensed. If the mission says speed/velocità/rapido, call "
+        "search_area with priority=\"speed\". If it says coverage/copertura/completa, use "
+        "priority=\"coverage\". Do not invent waypoints or POI ids. In human-facing reasoning/messages, "
+        "do NOT say AUTO or internal tool terms; say your assigned search lane/area and why.\n\n"
         "ACTIONS (pick exactly one):\n"
         f"{registry.compact_block()}\n\n"
         "MSG TYPES: proposal, ack, objection, handoff, report, status.\n"
         'Reply with ONE JSON object only: {"reasoning":"<1-2 sentences>","messages":[{"to":"all|agent_0|agent_1|agent_2","type":"<type>","content":"<short>"}],"action":{"tool":"<name>","args":{...}}}'
         "  (messages may be []).\n"
-        'EXAMPLE: {"reasoning":"Alpha took north; I take SW to avoid overlap.","messages":[{"to":"all","type":"ack","content":"Copy, I take SW."}],"action":{"tool":"patrol_sector","args":{"sector":"SW"}}}'
+        'EXAMPLE: {"reasoning":"Copro la mia area assegnata con passaggi larghi per privilegiare la velocità.","messages":[{"to":"all","type":"proposal","content":"Avvio ricerca rapida nella mia area assegnata, senza sovrappormi agli altri."}],"action":{"tool":"search_area","args":{"sector":"AUTO","priority":"speed"}}}'
     )
 
 
@@ -59,8 +66,10 @@ def build_decision_user_prompt(
     L.append("")
 
     # ── world: area + contacts ────────────────────────────────────────────
-    L.append(f"OPERATING AREA (geofence): lat {b.lat_min:.3f}..{b.lat_max:.3f}, lon {b.lon_min:.3f}..{b.lon_max:.3f}.")
-    L.append(f"SECTORS for patrol_sector: {', '.join(SECTORS)}.")
+    source = getattr(scene, "source", "operating area")
+    L.append(f"OPERATING AREA ({source}): lat {b.lat_min:.3f}..{b.lat_max:.3f}, lon {b.lon_min:.3f}..{b.lon_max:.3f}.")
+    L.append("Treat this as the marked patrol area. Stay inside it unless a contact task explicitly requires leaving it.")
+    L.append(f"SECTORS for patrol_sector/search_area: AUTO, ALL, WEST, EAST, {', '.join(SECTORS)}.")
     if scene.pois:
         L.append("POIs: " + "; ".join(f"{p.id}({p.label})@{p.lat:.3f},{p.lon:.3f}" for p in scene.pois))
     L.append("")
@@ -68,9 +77,15 @@ def build_decision_user_prompt(
         L.append("CONTACTS YOU SENSE NOW:")
         for c in obs.contacts:
             d = haversine_km(obs.lat, obs.lon, c.lat, c.lon)
-            tag = "SUSPICIOUS(unreported/unknown)" if c.is_suspicious else "benign-AIS"
+            if c.is_buoy:
+                tag = "MISSION_TARGET(missing buoy)"
+            elif c.is_suspicious:
+                tag = "SUSPICIOUS(unreported/unknown)"
+            else:
+                tag = "benign-AIS"
+            area = "inside area" if b.contains_point(c.lat, c.lon) else "outside area"
             L.append(f"  - {c.id} [{tag}] class={c.label} at {c.lat:.4f},{c.lon:.4f} "
-                     f"course {c.heading:.0f}° {c.speed_kn:.0f}kn dist {d:.2f}km")
+                     f"course {c.heading:.0f}° {c.speed_kn:.0f}kn dist {d:.2f}km ({area})")
     else:
         L.append("CONTACTS YOU SENSE NOW: none.")
     if shared_contacts:

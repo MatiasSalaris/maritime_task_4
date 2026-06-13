@@ -28,6 +28,13 @@ async def agent_ws(ws: WebSocket, agent_id: str) -> None:
             if msg_type == "action":
                 await provider.apply_action(agent_id, data.get("payload", {}))
 
+            elif msg_type == "mission_complete":
+                payload = data.get("payload", {}) or {}
+                result = payload.get("result", {}) if isinstance(payload, dict) else {}
+                result.setdefault("completed_by", agent_id)
+                result.setdefault("completed_at", time.time())
+                await provider.complete_mission(result)
+
             elif msg_type == "p2p_message":
                 payload = data.get("payload", {})
                 message = P2PMessage(

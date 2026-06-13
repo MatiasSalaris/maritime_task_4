@@ -31,6 +31,11 @@ class SensedContact:
         """Unknown or flagged contacts are the ones worth investigating."""
         return self.flagged or self.label.upper() == "UNKNOWN"
 
+    @property
+    def is_buoy(self) -> bool:
+        """Mission target for buoy-search scenarios."""
+        return self.label.upper() == "BUOY"
+
     @classmethod
     def from_dict(cls, d: dict[str, Any]) -> "SensedContact":
         pos = d.get("position") or {}
@@ -60,6 +65,9 @@ class Observation:
     inbox: list[dict[str, Any]] = field(default_factory=list)
     world_time: float = 0.0
     mission: str | None = None
+    mission_status: str = "idle"
+    mission_result: dict[str, Any] | None = None
+    aor: dict[str, Any] | None = None
 
     @classmethod
     def from_payload(cls, payload: dict[str, Any]) -> "Observation":
@@ -75,6 +83,9 @@ class Observation:
             inbox=list(payload.get("messages_inbox", [])),
             world_time=float(payload.get("world_time", 0.0) or 0.0),
             mission=payload.get("mission"),
+            mission_status=str(payload.get("mission_status") or "idle"),
+            mission_result=payload.get("mission_result"),
+            aor=payload.get("aor"),
         )
 
     def contact(self, contact_id: str) -> SensedContact | None:

@@ -1,7 +1,7 @@
 // Dark tactical/military overlay — default for demos
 export const tactical = {
   id: 'tactical',
-  label: 'Tactical',
+  label: 'Tattica',
   style: {
     version: 8,
     glyphs: 'https://demotiles.maplibre.org/font/{fontstack}/{range}.pbf',

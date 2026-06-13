@@ -18,7 +18,7 @@
         const pos = agentLayerRef.getScreenPos(a.id)
         if (!pos) return null
         const summary = agentDecisionSummary(a, $worldState.message_log)
-        if (!a.current_task && summary.why === 'No reasoning received yet.') return null
+        if (!a.current_task && summary.why === 'Nessun ragionamento ricevuto.') return null
         return {
           agent: a,
           x: pos.x,
@@ -45,7 +45,7 @@
 
     <div class="btask">{task}</div>
 
-    {#if why && why !== 'No reasoning received yet.'}
+    {#if why && why !== 'Nessun ragionamento ricevuto.'}
       <div class="note">{why}</div>
     {/if}
 

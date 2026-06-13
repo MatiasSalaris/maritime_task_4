@@ -6,7 +6,7 @@ from models.agent import AgentState, AgentStatus, AgentType, Observation, Positi
 from models.messages import P2PMessage
 from models.world import Contact, ContactStatus, Geofence, POI, WorldState
 from providers.base import AbstractPlatformProvider
-from providers.simulation.physics import move, distance_km
+from providers.simulation.physics import bearing_to, move, distance_km
 from providers.simulation.synthetic_ais import initial_contacts
 
 # ── Demo area: Strait of Sicily ───────────────────────────────────────────────
@@ -15,6 +15,7 @@ _SENSOR_RANGE_KM = 12.0
 _MAX_HISTORY = 400   # path history points kept per agent
 _MIN_HIST_DIST_M = 8 # minimum movement to record a new history point
 _AGENT_COLORS = ["#00d4ff", "#00ff88", "#ff8800"]
+_MAX_AGENT_SPEED_KN = 10_000_000.0
 
 _UAV_ALTITUDE_M         = 1000.0
 _UAV_HALF_FOV_DEG       = 60.0   # camera half-FOV
@@ -30,6 +31,8 @@ class SimulatedPlatformProvider(AbstractPlatformProvider):
         self.pois: list[POI] = self._init_pois()
         self.geofences: list[Geofence] = self._init_geofences()
         self.mission: str | None = None
+        self.mission_status: str = "idle"
+        self.mission_result: dict | None = None
         self.doctrine: str | None = None
         self.aor: dict | None = None
         self.world_time: float = time.time()
@@ -61,11 +64,7 @@ class SimulatedPlatformProvider(AbstractPlatformProvider):
         ]
 
     def _init_pois(self) -> list[POI]:
-        return [
-            POI(id="poi_1", position=Position(lat=37.555, lon=15.22), label="POI Alpha"),
-            POI(id="poi_2", position=Position(lat=37.445, lon=15.06), label="POI Bravo"),
-            POI(id="poi_3", position=Position(lat=37.510, lon=15.19), label="POI Charlie"),
-        ]
+        return []
 
     def _init_geofences(self) -> list[Geofence]:
         b = _BOUNDS
@@ -110,6 +109,9 @@ class SimulatedPlatformProvider(AbstractPlatformProvider):
             messages_inbox=[m.model_dump() for m in inbox],
             world_time=self.world_time,
             mission=self.mission,
+            mission_status=self.mission_status,
+            mission_result=self.mission_result,
+            aor=self.aor,
         )
 
     async def apply_action(self, agent_id: str, action: dict) -> None:
@@ -120,7 +122,7 @@ class SimulatedPlatformProvider(AbstractPlatformProvider):
         if parsed.heading is not None:
             agent.heading = parsed.heading % 360
         if parsed.speed_kn is not None:
-            agent.speed_kn = max(0.0, min(100.0, parsed.speed_kn))
+            agent.speed_kn = max(0.0, min(_MAX_AGENT_SPEED_KN, parsed.speed_kn))
         if parsed.planned_path is not None:
             agent.planned_path = parsed.planned_path
         if parsed.current_task is not None:
@@ -149,6 +151,8 @@ class SimulatedPlatformProvider(AbstractPlatformProvider):
             pois=list(self.pois),
             geofences=list(self.geofences),
             mission=self.mission,
+            mission_status=self.mission_status,
+            mission_result=self.mission_result,
             doctrine=self.doctrine,
             aor=self.aor,
             sensor_footprints=sensor_footprints,
@@ -163,6 +167,30 @@ class SimulatedPlatformProvider(AbstractPlatformProvider):
 
     async def set_mission(self, mission: str) -> None:
         self.mission = mission
+        self.mission_status = "active" if mission.strip() else "idle"
+        self.mission_result = None
+
+    async def complete_mission(self, result: dict) -> None:
+        self.mission_status = "completed"
+        self.mission_result = result
+        self.mission = self.mission or result.get("mission")
+
+    async def set_contact_position(self, contact_id: str, lat: float, lon: float) -> bool:
+        contact = next((c for c in self.contacts if c.id == contact_id), None)
+        if contact is None:
+            return False
+        contact.position = Position(lat=lat, lon=lon)
+        contact.status = ContactStatus.UNKNOWN
+        contact.nato_id = None
+        contact.first_seen = None
+        contact.last_seen = None
+        contact.last_known_position = None
+        contact.detecting_agents = []
+        self._pending_events = [e for e in self._pending_events if e.get("contact_id") != contact_id]
+        if self.mission_status == "completed":
+            self.mission_status = "active" if self.mission else "idle"
+            self.mission_result = None
+        return True
 
     async def set_agent_connected(self, agent_id: str, connected: bool) -> None:
         agent = self._agent(agent_id)
@@ -189,6 +217,8 @@ class SimulatedPlatformProvider(AbstractPlatformProvider):
             agent.current_task = None
         self.contacts = initial_contacts()
         self.mission = None
+        self.mission_status = "idle"
+        self.mission_result = None
         self._detection_state: dict[str, str] = {}
         self._pending_events.clear()
         self._nato_counter = 0
@@ -280,6 +310,10 @@ class SimulatedPlatformProvider(AbstractPlatformProvider):
             if agent.status == AgentStatus.SILENT:
                 continue
 
+            if agent.planned_path and agent.speed_kn > 0:
+                self._move_agent_along_path(agent, dt)
+                continue
+
             new_pos = move(agent.position, agent.heading, agent.speed_kn, dt)
 
             # Bounce off patrol area boundaries
@@ -296,6 +330,44 @@ class SimulatedPlatformProvider(AbstractPlatformProvider):
                 agent.path_history.append(Position(lat=new_pos.lat, lon=new_pos.lon))
                 if len(agent.path_history) > _MAX_HISTORY:
                     agent.path_history = agent.path_history[-_MAX_HISTORY:]
+
+    def _record_agent_position(self, agent: AgentState, pos: Position) -> None:
+        if not agent.path_history:
+            agent.path_history.append(Position(lat=pos.lat, lon=pos.lon))
+            return
+        ref = agent.path_history[-1]
+        if distance_km(ref, pos) * 1000 >= _MIN_HIST_DIST_M:
+            agent.path_history.append(Position(lat=pos.lat, lon=pos.lon))
+            if len(agent.path_history) > _MAX_HISTORY:
+                agent.path_history = agent.path_history[-_MAX_HISTORY:]
+
+    def _move_agent_along_path(self, agent: AgentState, dt: float) -> None:
+        """Consume planned waypoints with a distance budget.
+
+        This keeps very high demo speeds stable: agents advance along the
+        planned coverage path instead of overshooting the world bounds and
+        bouncing unpredictably.
+        """
+        speed_km_s = max(0.0, agent.speed_kn) * 1.852 / 3600.0
+        remaining_km = speed_km_s * dt
+        while remaining_km > 0 and agent.planned_path:
+            target = agent.planned_path[0]
+            dist_km = distance_km(agent.position, target)
+            if dist_km <= max(remaining_km, 1e-6):
+                agent.heading = bearing_to(agent.position, target)
+                agent.position = Position(lat=target.lat, lon=target.lon)
+                self._record_agent_position(agent, agent.position)
+                agent.planned_path.pop(0)
+                remaining_km -= dist_km
+                continue
+
+            agent.heading = bearing_to(agent.position, target)
+            step_dt = remaining_km / speed_km_s if speed_km_s > 0 else 0.0
+            agent.position = move(agent.position, agent.heading, agent.speed_kn, step_dt)
+            self._record_agent_position(agent, agent.position)
+            remaining_km = 0.0
+        if not agent.planned_path:
+            agent.speed_kn = 0.0
 
     def _move_contacts(self, dt: float) -> None:
         for c in self.contacts:

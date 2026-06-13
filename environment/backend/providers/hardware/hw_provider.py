@@ -22,6 +22,8 @@ class HardwarePlatformProvider(AbstractPlatformProvider):
         # TODO: initialise hardware connections here
         self._agents: list[AgentState] = []
         self._mission: str | None = None
+        self._mission_status: str = "idle"
+        self._mission_result: dict | None = None
 
     async def tick(self, dt: float) -> None:
         # Hardware time is real — poll sensors here if needed
@@ -43,6 +45,15 @@ class HardwarePlatformProvider(AbstractPlatformProvider):
 
     async def set_mission(self, mission: str) -> None:
         self._mission = mission
+        self._mission_status = "active" if mission.strip() else "idle"
+        self._mission_result = None
+
+    async def complete_mission(self, result: dict) -> None:
+        self._mission_status = "completed"
+        self._mission_result = result
+
+    async def set_contact_position(self, contact_id: str, lat: float, lon: float) -> bool:
+        return False
 
     async def set_agent_connected(self, agent_id: str, connected: bool) -> None:
         pass

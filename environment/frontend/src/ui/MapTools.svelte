@@ -9,9 +9,9 @@
   export let hasArea       = false
 
   const TOOL_BTNS = [
-    { id: 'rect',   label: '▭',  title: 'Rectangle AOR' },
-    { id: 'circle', label: '◯',  title: 'Circle AOR' },
-    { id: 'poly',   label: '⬡',  title: 'Polygon AOR (click pts, dbl-click close)' },
+    { id: 'rect',   label: '▭',  title: 'AOR rettangolare' },
+    { id: 'circle', label: '◯',  title: 'AOR circolare' },
+    { id: 'poly',   label: '⬡',  title: 'AOR poligonale: clic sui punti, doppio clic per chiudere' },
   ]
 
   function toggleMode(id) {
@@ -41,34 +41,45 @@
   {/each}
 
   {#if hasArea}
-    <button class="tool-btn clear" title="Clear AOR" on:click={onClearArea}>✕</button>
+    <button class="tool-btn clear" title="Cancella AOR" on:click={onClearArea}>✕</button>
   {/if}
 
   <div class="divider"></div>
 
-  <div class="group-label">MAP</div>
+  <div class="group-label">BOA</div>
+  <button
+    class="tool-btn buoy"
+    class:active={activeMode === 'buoy'}
+    title="Sposta la boa: clicca sulla mappa"
+    on:click={() => toggleMode('buoy')}
+  >◆</button>
+
+  <div class="divider"></div>
+
+  <div class="group-label">MAPPA</div>
   <button
     class="tool-btn"
     class:active={gridEnabled}
-    title="Toggle MGRS grid"
+    title="Mostra/nascondi griglia MGRS"
     on:click={onGridToggle}
   >⊞</button>
 
   <div class="divider"></div>
 
-  <div class="group-label">VIEW</div>
+  <div class="group-label">VISTA</div>
   <button
     class="tool-btn god-btn"
     class:god-active={$godView}
-    title="Toggle God View — reveals all undetected contacts"
+    title="Mostra/nascondi vista completa: rivela i contatti non rilevati"
     on:click={toggleGodView}
   >⊙</button>
 
   {#if activeMode && activeMode !== '__transmit__'}
     <div class="draw-hint">
-      {#if activeMode === 'rect'}Click & drag to draw box{/if}
-      {#if activeMode === 'circle'}Click center · drag radius{/if}
-      {#if activeMode === 'poly'}Click pts · dbl-click close · ESC cancel{/if}
+      {#if activeMode === 'rect'}Clic e trascina per disegnare il riquadro{/if}
+      {#if activeMode === 'circle'}Clic sul centro e trascina il raggio{/if}
+      {#if activeMode === 'poly'}Clic sui punti, doppio clic per chiudere, ESC annulla{/if}
+      {#if activeMode === 'buoy'}Clic sulla mappa per posizionare la boa{/if}
     </div>
   {/if}
 </div>
@@ -121,6 +132,7 @@
   .tool-btn.active { background: #0d2a3a; border-color: #00d4ff; color: #00d4ff; }
   .tool-btn.clear  { border-color: #ff335544; color: #ff6677; font-size: 12px; }
   .tool-btn.clear:hover { background: #200a0a; }
+  .tool-btn.buoy { color: #ffd84a; border-color: #ffd84a55; font-size: 13px; }
 
   .god-btn { font-size: 16px; }
   .god-btn.god-active {

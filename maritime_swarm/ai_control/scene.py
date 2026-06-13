@@ -27,10 +27,11 @@ class POI:
 class Scene:
     bounds: Bounds
     pois: list[POI] = field(default_factory=list)
+    source: str = "default"
 
     @classmethod
     def from_world_state(cls, state: dict[str, Any]) -> "Scene":
-        bounds = _bounds_from_geofences(state.get("geofences", []))
+        bounds, source = _bounds_from_state(state)
         pois = [
             POI(
                 id=str(p.get("id", "")),
@@ -40,7 +41,15 @@ class Scene:
             )
             for p in state.get("pois", [])
         ]
-        return cls(bounds=bounds, pois=pois)
+        return cls(bounds=bounds, pois=pois, source=source)
+
+    def with_aor(self, aor: dict[str, Any] | None) -> "Scene":
+        if not aor:
+            return self
+        bounds = _bounds_from_aor(aor)
+        if bounds is None:
+            return self
+        return Scene(bounds=bounds, pois=self.pois, source="selected AOR")
 
 
 # Fallback bounds (Strait of Sicily demo area) if no patrol geofence is present.
@@ -59,4 +68,40 @@ def _bounds_from_geofences(geofences: list[dict[str, Any]]) -> Bounds:
     lons = [float(c.get("lon")) for c in coords if c.get("lon") is not None]
     if not lats or not lons:
         return _DEFAULT_BOUNDS
+    return Bounds(lat_min=min(lats), lat_max=max(lats), lon_min=min(lons), lon_max=max(lons))
+
+
+def _bounds_from_state(state: dict[str, Any]) -> tuple[Bounds, str]:
+    aor_bounds = _bounds_from_aor(state.get("aor"))
+    if aor_bounds is not None:
+        return aor_bounds, "selected AOR"
+    return _bounds_from_geofences(state.get("geofences", [])), "patrol geofence"
+
+
+def _bounds_from_aor(aor: dict[str, Any] | None) -> Bounds | None:
+    """Return the bbox of a GeoJSON Polygon AOR, or None if invalid.
+
+    The frontend sends GeoJSON coordinates as [lon, lat]. The current patrol
+    tools operate on rectangular bounds, so this deliberately uses the AOR bbox:
+    good enough for rectangle/circle/poly selections and much better than
+    ignoring the operator-marked area.
+    """
+    if not isinstance(aor, dict) or aor.get("type") != "Polygon":
+        return None
+    rings = aor.get("coordinates") or []
+    if not rings or not isinstance(rings[0], list):
+        return None
+    lats: list[float] = []
+    lons: list[float] = []
+    for pt in rings[0]:
+        if not isinstance(pt, (list, tuple)) or len(pt) < 2:
+            continue
+        try:
+            lon, lat = float(pt[0]), float(pt[1])
+        except (TypeError, ValueError):
+            continue
+        lats.append(lat)
+        lons.append(lon)
+    if not lats or not lons:
+        return None
     return Bounds(lat_min=min(lats), lat_max=max(lats), lon_min=min(lons), lon_max=max(lons))

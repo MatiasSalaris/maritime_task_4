@@ -14,36 +14,50 @@
         body: JSON.stringify({ text }),
       })
       if (r.ok) {
-        status = change ? 'Intent updated' : 'Mission sent'
+        status = change ? 'Intento aggiornato' : 'Missione inviata'
         setTimeout(() => (status = ''), 3000)
       }
     } catch {
-      status = '✕ Connection error'
+      status = '✕ Errore di connessione'
     }
   }
+
+  $: missionStatus = $worldState.mission_status ?? ($worldState.mission ? 'active' : 'idle')
+  $: missionResult = $worldState.mission_result ?? null
+  $: missionLabel = missionStatus === 'completed' ? 'Completata' : 'Attiva'
+  $: resultText = missionResult
+    ? [
+        missionResult.contact_id ? `target ${missionResult.contact_id}` : null,
+        missionResult.completed_by_name ? `da ${missionResult.completed_by_name}` : null,
+        missionResult.lat && missionResult.lon ? `${Number(missionResult.lat).toFixed(4)}N ${Number(missionResult.lon).toFixed(4)}E` : null,
+      ].filter(Boolean).join(' · ')
+    : ''
 
 </script>
 
 <div class="box">
-  <div class="title">MISSION</div>
+  <div class="title">MISSIONE</div>
 
   {#if $worldState.mission}
-    <div class="current">
-      <span class="label">Active</span>
+    <div class="current" class:completed={missionStatus === 'completed'}>
+      <span class="label">{missionLabel}</span>
       <span class="text">{$worldState.mission}</span>
+      {#if missionStatus === 'completed' && resultText}
+        <span class="result">{resultText}</span>
+      {/if}
     </div>
   {/if}
 
   <textarea
     class="input"
     rows="3"
-    placeholder="Write an order for the swarm..."
+    placeholder="Scrivi un ordine per lo sciame..."
     bind:value={text}
   />
 
   <div class="actions">
-    <button class="btn primary" on:click={() => submit(false)}>Start</button>
-    <button class="btn warn"    on:click={() => submit(true)}>Update</button>
+    <button class="btn primary" on:click={() => submit(false)}>Avvia</button>
+    <button class="btn warn"    on:click={() => submit(true)}>Aggiorna</button>
   </div>
 
   {#if status}
@@ -74,13 +88,23 @@
     display: grid;
     gap: 3px;
   }
+  .current.completed {
+    border-left-color: #00ff88;
+    background: #071c14;
+  }
   .label { color: #4a7a9a; font-size: 10px; text-transform: uppercase; letter-spacing: 0.08em; }
+  .current.completed .label { color: #00ff88; }
   .text  {
     color: #c8d8e8;
     display: -webkit-box;
     -webkit-line-clamp: 2;
     -webkit-box-orient: vertical;
     overflow: hidden;
+  }
+  .result {
+    color: #8fd8b8;
+    font-size: 11px;
+    line-height: 1.35;
   }
   .input {
     width: 100%;

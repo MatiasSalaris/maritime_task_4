@@ -32,6 +32,7 @@
   let gridEnabled = false
   let hasArea     = false
   let pendingGeo  = null    // GeoJSON Polygon geometry waiting to be sent
+  let buoyClickHandler = null
 
   // Reactive layer updates (data rate ~10 Hz): feed targets + cache geometry.
   // The actual drawing of the trace / sensor rings happens at 60 fps in the
@@ -72,9 +73,41 @@
 
   function switchOverlay(id) { mapMgr.switchOverlay(id) }
 
+  function clearBuoyPlacementMode() {
+    const map = mapMgr?.map
+    if (map && buoyClickHandler) map.off('click', buoyClickHandler)
+    buoyClickHandler = null
+    map?.getCanvas()?.style && (map.getCanvas().style.cursor = '')
+  }
+
+  function enableBuoyPlacementMode() {
+    const map = mapMgr?.map
+    if (!map) return
+    clearBuoyPlacementMode()
+    areaSelector?.cancel()
+    drawMode = 'buoy'
+    map.getCanvas().style.cursor = 'crosshair'
+    buoyClickHandler = async (e) => {
+      await placeBuoy(e.lngLat.lat, e.lngLat.lng)
+      clearBuoyPlacementMode()
+      drawMode = null
+    }
+    map.on('click', buoyClickHandler)
+  }
+
   function handleModeChange(mode) {
     if (mode === '__transmit__') { sendAOR(); return }
+    if (mode === 'buoy') {
+      if (drawMode === 'buoy') {
+        clearBuoyPlacementMode()
+        drawMode = null
+      } else {
+        enableBuoyPlacementMode()
+      }
+      return
+    }
 
+    clearBuoyPlacementMode()
     drawMode = mode
     if (mode) {
       areaSelector?.setMode(mode)
@@ -101,6 +134,19 @@
       })
     } catch (e) {
       console.error('[AOR] send failed:', e)
+    }
+  }
+
+  async function placeBuoy(lat, lon) {
+    try {
+      await fetch('/api/contacts/buoy_01/position', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ lat, lon }),
+      })
+      contactLayer?.reset()
+    } catch (e) {
+      console.error('[BUOY] placement failed:', e)
     }
   }
 
@@ -179,6 +225,7 @@
     areaLayer?.teardown()
     animCanvas?.destroy()
     militaryGrid?.destroy()
+    clearBuoyPlacementMode()
     areaSelector?.destroy()
     mapMgr?.destroy()
   })
