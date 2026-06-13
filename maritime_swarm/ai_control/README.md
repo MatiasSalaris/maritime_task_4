@@ -74,11 +74,18 @@ concurrent agents on a free key.
 
 ## Where the swarm breaks (honest limits)
 
-- **LLM rate limits.** Three agents reasoning concurrently can exceed Groq's
-  free-tier tokens/minute and get `429`'d. The loop handles it (staggered starts,
-  a ~25 s backoff, and the agent keeps its current action), but under heavy load
-  the cadence stretches and coordination slows. Local serving via Ollama removes
-  this entirely.
+- **LLM rate limits are the dominant constraint.** Groq's free tier for
+  `llama-3.1-8b-instant` is ~**6000 tokens/min** *and* ~**500k tokens/day**. A
+  decision costs ~1–1.5k tokens, so the whole swarm sustains only ~4–5
+  decisions/min: an initial division or a mid-mission re-convergence (≈3
+  decisions) plays out over **~30–45 s**, not the ~5 s a snappy demo wants. A
+  shared, server-synced token-bucket limiter keeps three agents from bursting the
+  per-minute cap into multi-minute `429` lockouts (it paces them into round-robin
+  and each keeps its current action while waiting); a precise `retry-after`
+  backoff handles the rest. The **daily** cap is the harder wall — a long day of
+  testing exhausts it and locks the swarm out until it resets. The only levers
+  (with the model fixed and no local serving) are a higher-tier key for snappier
+  cadence; the architecture itself is unaffected.
 - **Small-model judgement.** A small open-weight model (8B / 3B / 7B) keeps the
   swarm responsive and is what the challenge intends, but it occasionally
   mis-phrases a plan or picks a blunt tool; the grounding and the few-shot
