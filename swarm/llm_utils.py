@@ -22,7 +22,7 @@ def inferenza(
     json_mode: bool = False,
     temperature: float = 0.2,
 ) -> str:
-    """One chat-completion call against the (OpenAI-compatible) Groq API."""
+    """One chat-completion call against the Groq API."""
     messages = []
     if system_prompt is not None:
         messages.append({"role": "system", "content": system_prompt})
@@ -85,20 +85,23 @@ Output ONLY a valid JSON object, no markdown, no commentary, with this schema:
 }"""
 
 
-# Planning phase. This is a TEMPLATE: fill the {placeholders} from the agent's
-# own state before sending it as the system prompt. The JSON example braces are
-# doubled ({{ }}) so the template survives str.format(); real braces come back
-# after formatting.
-SYSTEM_PROMPT_AGENT = """\
+# Planning phase, step 1 of 2 — REASONING ONLY.
+# This is a TEMPLATE: fill the {placeholders} from the agent's own state before
+# sending it as the system prompt. The JSON example braces are doubled ({{ }})
+# so the template survives str.format(); real braces come back after formatting.
+# Output is pure chain-of-thought, no action — that is the action prompt's job.
+SYSTEM_PROMPT_PLAN = """\
 You are AGENT {agent_id}, one of three autonomous maritime assets in a shared
 world. There is no central commander: you choose your own moves and coordinate
-with your peers by message. In THIS phase you receive the mission briefing and
-must output a short PLAN: exactly 3 actions for yourself.
+with your peers by message.
+
+In THIS phase you only THINK. You receive the mission briefing and your current
+situation and produce a short chain-of-thought about what you should do NEXT.
+You do NOT emit an action here — only the reasoning that will justify one.
 
 # World
 - Grid {W}x{H}. Coordinates are integers. x = column (0 = west, {W_max} = east),
   y = row (0 = north, {H_max} = south). Valid values are 0..{W_max} on each axis.
-- You may NEVER leave the grid: every coordinate you output must be in bounds.
 
 # You
 - id: {agent_id}
@@ -109,27 +112,39 @@ must output a short PLAN: exactly 3 actions for yourself.
 # Your peers (current positions)
 {peers}
 
-# Available actions
-- MOVE_TO(x1, y1, x2, y2): travel in a straight line from (x1,y1) to (x2,y2),
-  sensing within sensor_range along the way.
-
-# How to plan
+# How to think
 - Pick a sector that does NOT overlap your peers' areas; cover ground they won't.
-- Your first leg should start at or near your current position.
-- Space parallel sweep legs by about sensor_range so you leave no gaps.
-- You do NOT know where the target is. Never plan as if its location is known:
-  cover area systematically. Detection happens during execution, not now.
-- If the priority is speed, favour fewer, longer legs over dense coverage.
+- You do NOT know where the target is. Reason about systematic coverage, never as
+  if its location is known. Detection happens during execution, not now.
+- If the priority is speed, favour covering more ground over dense coverage.
+- Reason about your NEXT single move only, starting from your current position.
 
 Output ONLY a valid JSON object, no markdown, no commentary:
 
 {{
-  "reasoning": "1-2 short sentences: which sector you take and why",
-  "plan": [
-    {{"action": "MOVE_TO", "args": [x1, y1, x2, y2]}},
-    {{"action": "MOVE_TO", "args": [x1, y1, x2, y2]}},
-    {{"action": "MOVE_TO", "args": [x1, y1, x2, y2]}}
-  ]
+  "reasoning": "2-4 short sentences: the sector you take, why, and where you intend to move next"
+}}"""
+
+
+# Planning phase, step 2 of 2 — ACTION SELECTION.
+# Generic: given the agent's own reasoning (passed as the user message) and a
+# catalog of callable tools, translate the reasoning into exactly ONE tool call
+# with the right arguments. This step grounds the language; it does not re-plan
+# and it knows nothing world-specific beyond the tool catalog.
+SYSTEM_PROMPT_ACTION = """\
+You are an action selector. You receive an agent's REASONING about what it wants
+to do next, and a catalog of tools it can call. Choose exactly ONE tool and fill
+in its arguments so they faithfully realise the reasoning. Do not invent tools,
+and do not output arguments the reasoning does not support.
+
+# Available tools (choose exactly ONE)
+{tools}
+
+Output ONLY a valid JSON object, no markdown, no commentary:
+
+{{
+  "action": "<tool name>",
+  "args": [ ... ]
 }}"""
 
 
@@ -158,15 +173,15 @@ Output ONLY a valid JSON object, no markdown, no commentary:
 }}"""
 
 
-def build_agent_system_prompt(state: dict) -> str:
-    """Fill SYSTEM_PROMPT_AGENT with one agent's state dict."""
+def build_plan_system_prompt(state: dict) -> str:
+    """Fill SYSTEM_PROMPT_PLAN (reasoning step) with one agent's state dict."""
     w, h = state["world_size"]
     x, y = state["position"]
     peers_lines = "\n".join(
         f"- {p['id']}: ({p['position'][0]}, {p['position'][1]})"
         for p in state["peers"]
     )
-    return SYSTEM_PROMPT_AGENT.format(
+    return SYSTEM_PROMPT_PLAN.format(
         agent_id=state["agent_id"],
         W=w,
         H=h,
@@ -178,3 +193,16 @@ def build_agent_system_prompt(state: dict) -> str:
         sensor_range=state["sensor_range"],
         peers=peers_lines,
     )
+
+
+def build_action_system_prompt(tools: list[dict]) -> str:
+    """Generic action selector prompt.
+
+    `tools` is the catalog the agent may call, each a dict like
+    {"signature": "MOVE_TO(x1, y1, x2, y2)", "description": "..."}. The reasoning
+    itself is passed separately, as the user message, at inference time.
+    """
+    catalog = "\n".join(
+        f"- {t['signature']}: {t['description']}" for t in tools
+    )
+    return SYSTEM_PROMPT_ACTION.format(tools=catalog)
