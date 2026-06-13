@@ -30,6 +30,7 @@ from maritime_swarm.ai_control.coordination import (
     default_allocation,
     deconflict,
 )
+from maritime_swarm.ai_control.geo import haversine_km
 from maritime_swarm.ai_control.observation import Observation
 from maritime_swarm.ai_control.planner import TacticalPlanner
 from maritime_swarm.ai_control.scene import Scene
@@ -43,6 +44,9 @@ STATUS_INTERVAL_S = 4.0       # world-time between status broadcasts
 NEGOTIATION_GRACE_S = 3.0     # wait this long (world time) before leading, so peers are known
 REACTIVE_INTERVAL_S = 4.0     # min wall-clock between tactician LLM calls
 _FOLLOW_WORDS = ("follow", "shadow", "escort", "track", "tail", "trail")
+# Missions where the WHOLE team should converge on a discovered target.
+_CONVERGE_WORDS = ("everybody", "every asset", "all assets", "all units", "all of you",
+                   "whole team", "converge", "intercept", "rendezvous")
 
 
 class AgentBrain:
@@ -77,6 +81,7 @@ class AgentBrain:
         self._negotiated_for: str | None = None
         self._planned_roster: set[str] = set()
         self._planned_engaged: frozenset[str] = frozenset()
+        self._planned_targets: frozenset[str] = frozenset()
         self._thinking_strategy = False
         self._thinking_reactive = False
         self._last_reactive_think = 0.0
@@ -210,6 +215,25 @@ class AgentBrain:
                 engaged[pid] = a
         return engaged
 
+    def _is_converge_mission(self) -> bool:
+        return any(w in (self.mission or "").lower() for w in _CONVERGE_WORDS)
+
+    def _known_target_ids(self) -> frozenset[str]:
+        """Suspicious (flagged / UNKNOWN) contacts in the shared picture."""
+        return frozenset(
+            cid for cid, sc in self.view.contacts.items()
+            if sc.flagged or (sc.label or "").upper() == "UNKNOWN")
+
+    def _converge_target(self, obs: Observation) -> str | None:
+        """For a 'whole team converge/intercept' mission, the target to send all to."""
+        if not self._is_converge_mission():
+            return None
+        cands = [(cid, sc) for cid, sc in self.view.contacts.items()
+                 if sc.flagged or (sc.label or "").upper() == "UNKNOWN"]
+        if not cands:
+            return None
+        return min(cands, key=lambda kv: haversine_km(obs.lat, obs.lon, kv[1].lat, kv[1].lon))[0]
+
     def _maybe_negotiate(self, obs: Observation) -> None:
         if self._thinking_strategy or self._t0 is None:
             return
@@ -220,12 +244,14 @@ class AgentBrain:
             return
         roster = set(self.view.live_member_ids())
         engaged = frozenset(self._engaged_map())
-        # Re-plan on a new mission, a roster change, OR when a peer becomes
-        # (dis)engaged — so the remaining assets re-cover the area.
+        # For a converge/intercept mission, the discovery of the target is itself
+        # a reason to re-plan and send the whole team to it.
+        targets = self._known_target_ids() if self._is_converge_mission() else frozenset()
         need = (
             self._negotiated_for != self.mission
             or roster != self._planned_roster
             or engaged != self._planned_engaged
+            or targets != self._planned_targets
         )
         if not need:
             return
@@ -233,6 +259,7 @@ class AgentBrain:
         self._negotiated_for = self.mission
         self._planned_roster = roster
         self._planned_engaged = engaged
+        self._planned_targets = targets
         asyncio.create_task(self._run_strategy(obs))
 
     async def _run_strategy(self, obs: Observation) -> None:
@@ -247,6 +274,16 @@ class AgentBrain:
             plan = await asyncio.to_thread(
                 self.strategist.plan, self.mission, to_allocate, self.scene, contacts, engaged_labels)
             allocation = dict(plan["allocation"])
+            reasoning = plan.get("reasoning") or "Proposed task division."
+
+            # Whole-team converge/intercept: once the target is known, send EVERY
+            # un-engaged asset to it (deterministic — the order is unambiguous).
+            target = self._converge_target(obs)
+            if target is not None:
+                for m in to_allocate:
+                    allocation[m["id"]] = {"kind": "investigate", "contact_id": target}
+                reasoning = f"Target {target} acquired — directing all assets to intercept it."
+
             allocation.update(engaged)   # engaged assets keep their task
             self.brief = plan["brief"]
             self.view.brief = plan["brief"]
@@ -255,9 +292,9 @@ class AgentBrain:
             await self.client.send_p2p(
                 "all", "proposal",
                 {"brief": plan["brief"], "allocation": allocation},
-                reasoning=plan.get("reasoning") or "Proposed task division.")
+                reasoning=reasoning)
             note = " (re-dividing around engaged asset)" if engaged else ""
-            await self.client.send_cot(f"Plan{note}: {plan.get('reasoning') or 'task division proposed'}\n")
+            await self.client.send_cot(f"Plan{note}: {reasoning}\n")
             logger.info("[%s] (leader) proposed allocation: %s%s", self.ctx.agent_id,
                         {k: assignment_label(v) for k, v in allocation.items()},
                         " | engaged=" + ",".join(engaged) if engaged else "")
