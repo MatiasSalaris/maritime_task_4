@@ -31,12 +31,15 @@ class RateLimiter:
         self._t = time.monotonic()
         self._lock = asyncio.Lock()
         self._budget_fn = budget_fn   # returns the server's last remaining-tokens, or None
+        self._last_srv: float | None = None
 
     async def acquire(self, n: float) -> None:
         """Block until ~n tokens are available, then consume (FIFO/paced).
 
-        Never assumes more than the server's last reported remaining tokens, so
-        the swarm doesn't drive the provider bucket negative into a lockout.
+        Re-baselines to the server's reported remaining tokens whenever a FRESH
+        reading arrives (so we burst when the server has budget and back off when
+        it doesn't), and decrements locally between readings to pace within a
+        burst. This keeps the provider bucket from going negative into a lockout.
         """
         n = min(n, self.capacity)
         async with self._lock:
@@ -46,8 +49,9 @@ class RateLimiter:
                 self._t = now
                 if self._budget_fn is not None:
                     srv = self._budget_fn()
-                    if srv is not None:
-                        self.tokens = min(self.tokens, srv)   # trust the server's truth
+                    if srv is not None and srv != self._last_srv:   # fresh server truth
+                        self._last_srv = srv
+                        self.tokens = min(self.capacity, srv)
                 if self.tokens >= n:
                     self.tokens -= n
                     return
