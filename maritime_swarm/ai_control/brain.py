@@ -21,6 +21,7 @@ from typing import Any
 from maritime_swarm.ai_control.blackboard import SwarmView
 from maritime_swarm.ai_control.observation import Observation
 from maritime_swarm.ai_control.planner import AgentDecider
+from maritime_swarm.ai_control.rate_limit import NullLimiter
 from maritime_swarm.ai_control.scene import Scene
 from maritime_swarm.ai_control.tools import Tool, ToolContext, ToolError, ToolRegistry
 from maritime_swarm.ai_control.world_client import WorldModelClient
@@ -31,8 +32,12 @@ STATUS_INTERVAL_S = 4.0      # world-time between status heartbeats
 # Event-driven thinking: react fast to events (a peer message, a new contact, a
 # finished task, a mission change) but only poll slowly when nothing changes.
 # This is responsive where it matters AND frugal with the LLM token budget.
-DECISION_INTERVAL_S = 25.0   # idle heartbeat — re-think this often with no events
-MIN_DECISION_INTERVAL_S = 5.0  # floor between decisions (responsiveness to events)
+# Token-bucket reality (Groq free tier ≈ 6000 tokens/min, refilling ~100/s):
+# bursts are fine, only the sustained average matters. So respond fast to EVENTS
+# (~5s) but keep the IDLE heartbeat long so steady-state stays cheap and never
+# drains the bucket into a lockout.
+DECISION_INTERVAL_S = 45.0   # idle heartbeat — re-think this often with no events
+MIN_DECISION_INTERVAL_S = 5.0  # floor between decisions (event responsiveness)
 RATE_LIMIT_COOLDOWN_S = 8.0   # fallback backoff if a 429 carries no retry-after
 _NO_OP_TOOLS = {"", "continue", "none", "keep", "hold_current"}
 
@@ -47,6 +52,7 @@ class AgentBrain:
         mission: str | None,
         registry: ToolRegistry,
         decision_interval: float = DECISION_INTERVAL_S,
+        limiter=None,
     ) -> None:
         self.client = client
         self.ctx = ctx
@@ -55,6 +61,7 @@ class AgentBrain:
         self.mission = (mission or "").strip() or None
         self.registry = registry
         self.decision_interval = decision_interval
+        self.limiter = limiter or NullLimiter()
 
         self.view = SwarmView(ctx.agent_id)
         self.active_tool: Tool | None = None
@@ -179,6 +186,9 @@ class AgentBrain:
             peers, shared, messages = self._context()
             task_status = "executing" if self.active_tool is not None else "idle"
             silent = self.view.silent_peer_ids()
+            # Pace against the shared token budget so 3 agents never burst the
+            # provider's per-minute limit into a lockout.
+            await self.limiter.acquire(1300)
             d = await asyncio.to_thread(
                 self.decider.decide, obs, self.ctx, self.scene, self.mission,
                 peers, shared, messages, self._current_task, self.registry,

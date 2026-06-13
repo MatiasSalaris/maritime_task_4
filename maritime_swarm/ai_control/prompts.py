@@ -20,30 +20,21 @@ from maritime_swarm.ai_control.tools import ToolContext, ToolRegistry
 
 _SENSOR_BY_TYPE = {"USV": "360° surface radar", "UAV": "downward EO/IR camera"}
 
-_FEWSHOT = """\
-EXAMPLES (format only):
-{"reasoning":"Alpha took the north; I'll cover SW to avoid overlap.","messages":[{"to":"all","type":"ack","content":"Copy — I take SW."}],"action":{"tool":"patrol_sector","args":{"sector":"SW"}}}
-{"reasoning":"Only I sense the unreported vessel and the order is to shadow it; engaging at 500 m.","messages":[{"to":"all","type":"handoff","content":"Engaging c003 at 500 m; you keep coverage."}],"action":{"tool":"escort_contact","args":{"contact_id":"c003","standoff_m":500}}}
-"""
-
-
 def build_decision_system_prompt(registry: ToolRegistry) -> str:
     return (
-        "You are ONE of three peer maritime assets. There is NO commander: you decide ONLY your "
-        "own next action, and the team divides work by CHATTING until you agree.\n"
-        "- Persistent ops: never stop unless ordered; after a goal, keep operating sensibly.\n"
-        "- Interpret the mission however phrased; decompose it and use tools to carry out your part.\n"
-        "- Coordinate: state intent (proposal), answer peers (ack / objection+counter). Don't grab a "
-        "shared task before agreeing; but act alone on what only you can do (e.g. only you sense the "
-        "target). If you and a peer still want the same thing, the lower id keeps it and the other "
-        "takes the complement (a shared tie-break, not an order). Respect commitments; cover a silent peer.\n"
-        "- Grounding: only use contact/POI ids present in your situation; never invent them.\n\n"
-        "ACTIONS (choose exactly one):\n"
+        "You are ONE of three peer maritime assets — NO commander. You decide ONLY your own next "
+        "action; the team divides work by CHATTING until you agree.\n"
+        "Rules: persistent ops — never stop unless ordered. Interpret the mission however phrased and "
+        "use tools for your part. State intent (proposal); answer peers (ack, or objection+counter). "
+        "Don't grab a shared task before agreeing, but act alone on what only you can do. If you and a "
+        "peer want the same thing, the LOWER id keeps it and the other takes the complement. Respect "
+        "commitments; cover a silent peer. Only use contact/POI ids shown to you — never invent ids.\n\n"
+        "ACTIONS (pick exactly one):\n"
         f"{registry.compact_block()}\n\n"
         "MSG TYPES: proposal, ack, objection, handoff, report, status.\n"
-        "Reply with ONE JSON object only:\n"
-        '{"reasoning":"<1-2 sentences>","messages":[{"to":"all|agent_0|agent_1|agent_2","type":"<type>","content":"<short>"}],"action":{"tool":"<name>","args":{...}}}\n'
-        "messages may be []. Keep it short.\n\n" + _FEWSHOT
+        'Reply with ONE JSON object only: {"reasoning":"<1-2 sentences>","messages":[{"to":"all|agent_0|agent_1|agent_2","type":"<type>","content":"<short>"}],"action":{"tool":"<name>","args":{...}}}'
+        "  (messages may be []).\n"
+        'EXAMPLE: {"reasoning":"Alpha took north; I take SW to avoid overlap.","messages":[{"to":"all","type":"ack","content":"Copy, I take SW."}],"action":{"tool":"patrol_sector","args":{"sector":"SW"}}}'
     )
 
 

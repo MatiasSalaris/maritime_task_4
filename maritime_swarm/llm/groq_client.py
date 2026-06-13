@@ -17,9 +17,27 @@ import requests
 
 _DEFAULT_BASE_URL = "https://api.groq.com/openai/v1"
 
+# Last observed server token budget (updated on every call, success or 429), so a
+# shared client-side limiter can pace accurately and never drive the bucket negative.
+_last_remaining_tokens: float | None = None
+
 
 def _base_url() -> str:
     return (os.getenv("LLM_BASE_URL") or os.getenv("GROQ_BASE_URL") or _DEFAULT_BASE_URL).rstrip("/")
+
+
+def last_remaining_tokens() -> float | None:
+    return _last_remaining_tokens
+
+
+def _record_budget(headers) -> None:
+    global _last_remaining_tokens
+    try:
+        rem = headers.get("x-ratelimit-remaining-tokens")
+        if rem is not None:
+            _last_remaining_tokens = float(rem)
+    except Exception:
+        pass
 
 
 def inferenza(
@@ -50,6 +68,7 @@ def inferenza(
         json=payload,
         timeout=45,
     )
+    _record_budget(response.headers)   # capture remaining tokens (success or 429)
     response.raise_for_status()
     return response.json()["choices"][0]["message"]["content"]
 

@@ -21,6 +21,7 @@ import requests
 from maritime_swarm.ai_control.brain import AgentBrain
 from maritime_swarm.ai_control.navigation_tools import default_registry
 from maritime_swarm.ai_control.planner import AgentDecider, GroqDecider, HeuristicDecider
+from maritime_swarm.ai_control.rate_limit import NullLimiter, RateLimiter
 from maritime_swarm.ai_control.scene import Scene
 from maritime_swarm.ai_control.tools import ToolContext
 from maritime_swarm.ai_control.world_client import WorldModelClient
@@ -96,6 +97,10 @@ async def run_swarm(
     registry = default_registry()
 
     agents = state.get("agents", [])
+    # One shared limiter paces all agents' LLM calls under the provider's TPM
+    # limit (real LLM only; the heuristic decider needs no pacing).
+    from maritime_swarm.llm.groq_client import last_remaining_tokens
+    limiter = RateLimiter(budget_fn=last_remaining_tokens) if isinstance(decider, GroqDecider) else NullLimiter()
     logger.info(
         "Controlling %d agents | decider=%s | area lat %.3f..%.3f lon %.3f..%.3f",
         len(agents), type(decider).__name__,
@@ -116,7 +121,7 @@ async def run_swarm(
             bounds=scene.bounds,
         )
         client = WorldModelClient(ws_url, a["id"])
-        brains.append(AgentBrain(client, ctx, decider, scene, mission, registry))
+        brains.append(AgentBrain(client, ctx, decider, scene, mission, registry, limiter=limiter))
 
     await asyncio.gather(*(b.run() for b in brains))
 

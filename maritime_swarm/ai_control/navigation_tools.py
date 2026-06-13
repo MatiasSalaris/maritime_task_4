@@ -76,7 +76,7 @@ def _stop(task: str) -> dict[str, Any]:
 # ── go_to (raw waypoint) ───────────────────────────────────────────────────────
 class GoToTool(Tool):
     name = "go_to"
-    description = "Transit to a geographic waypoint (lat, lon) and hold there on arrival."
+    description = "transit to a lat/lon waypoint."
     parameters = {
         "lat": {"type": "number", "description": "target latitude (decimal degrees)"},
         "lon": {"type": "number", "description": "target longitude (decimal degrees)"},
@@ -108,8 +108,7 @@ class GoToTool(Tool):
 # ── move (relative, directional) ───────────────────────────────────────────────
 class MoveTool(Tool):
     name = "move"
-    description = ("Move a distance in a compass direction from your CURRENT position "
-                   "(e.g. 5 km south). Use for directional/relative orders.")
+    description = "move a distance in a compass direction from your current position (e.g. 5 km south)."
     parameters = {
         "direction": {"type": "string", "description": "compass direction (north, south, east, west, NE, NW, SE, SW) or a bearing in degrees"},
         "distance_km": {"type": "number", "description": "how far to move, in kilometres", "required": False},
@@ -152,7 +151,7 @@ class MoveTool(Tool):
 # ── go_to_poi (symbolic) ───────────────────────────────────────────────────────
 class GoToPoiTool(Tool):
     name = "go_to_poi"
-    description = "Transit to a named point of interest by its id, and hold there on arrival."
+    description = "go to a point of interest by its id."
     parameters = {
         "poi_id": {"type": "string", "description": "id of a POI from the operating-area list (e.g. 'poi_1')"},
     }
@@ -184,10 +183,7 @@ class GoToPoiTool(Tool):
 # ── patrol_sector (continuous baseline) ────────────────────────────────────────
 class PatrolSectorTool(Tool):
     name = "patrol_sector"
-    description = (
-        "Continuously patrol a named sector of the operating area "
-        "(NW, NE, SW, SE or CENTER), sweeping it for coverage. Runs indefinitely."
-    )
+    description = "continuously patrol a named sector (NW/NE/SW/SE/CENTER)."
     parameters = {
         "sector": {"type": "string", "description": "one of NW, NE, SW, SE, CENTER"},
     }
@@ -228,10 +224,7 @@ class PatrolSectorTool(Tool):
 # ── investigate_contact (reactive) ─────────────────────────────────────────────
 class InvestigateContactTool(Tool):
     name = "investigate_contact"
-    description = (
-        "Close on a known contact (by id) to identify it. Completes on arrival; "
-        "the contact must currently be sensed or in the shared picture."
-    )
+    description = "close on a known contact (by id) to identify it."
     parameters = {
         "contact_id": {"type": "string", "description": "id of a contact in sensor range or the shared picture"},
     }
@@ -270,10 +263,7 @@ class InvestigateContactTool(Tool):
 # ── report_contact (reactive, emits a P2P anomaly report) ──────────────────────
 class ReportContactTool(Tool):
     name = "report_contact"
-    description = (
-        "Report a contact to the team with an assessment and a rationale "
-        "(e.g. flagging a vessel that does not match a commercial AIS pattern)."
-    )
+    description = "report a contact with a classification and one-line rationale."
     parameters = {
         "contact_id": {"type": "string", "description": "id of the contact being reported"},
         "classification": {"type": "string", "description": "your assessment, e.g. ANOMALY / SUSPICIOUS / BENIGN"},
@@ -328,10 +318,7 @@ class ReportContactTool(Tool):
 # ── escort_contact (continuous station-keeping at a standoff) ──────────────────
 class EscortContactTool(Tool):
     name = "escort_contact"
-    description = (
-        "Escort a contact by holding station at a standoff distance and relative "
-        "bearing from it (loose formation). Runs continuously."
-    )
+    description = "shadow/escort a contact at a standoff distance and relative bearing."
     parameters = {
         "contact_id": {"type": "string", "description": "id of the vessel to escort"},
         "standoff_m": {"type": "number", "description": "standoff distance in metres (e.g. 500)", "required": False},
@@ -381,10 +368,7 @@ class EscortContactTool(Tool):
 # ── visit_pois (sequential investigation, then optional rendezvous) ────────────
 class VisitPoisTool(Tool):
     name = "visit_pois"
-    description = (
-        "Visit a list of POIs in the given order, then optionally hold at a "
-        "rendezvous POI. Runs until done, then holds at the last point."
-    )
+    description = "visit POIs in the given order, then optionally rendezvous."
     parameters = {
         "poi_ids": {"type": "array", "description": "ordered list of POI ids to visit"},
         "rendezvous": {"type": "string", "description": "POI id to converge on after the sequence", "required": False},
@@ -442,7 +426,7 @@ class VisitPoisTool(Tool):
 # ── rendezvous (converge on a point) ───────────────────────────────────────────
 class RendezvousTool(Tool):
     name = "rendezvous"
-    description = "Converge on a rendezvous point (a POI id) and hold there."
+    description = "converge on a rendezvous point (a POI id)."
     parameters = {
         "poi_id": {"type": "string", "description": "POI id to converge on"},
     }
@@ -474,7 +458,7 @@ class RendezvousTool(Tool):
 # ── hold_position ──────────────────────────────────────────────────────────────
 class HoldPositionTool(Tool):
     name = "hold_position"
-    description = "Stop and hold the current position for a number of seconds to observe."
+    description = "stop and hold position for N seconds to observe."
     parameters = {
         "seconds": {"type": "number", "description": "how long to hold (default 20)", "required": False},
     }
