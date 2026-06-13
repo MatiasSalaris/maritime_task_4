@@ -21,7 +21,7 @@ import asyncio
 import logging
 import os
 
-from maritime_swarm.ai_control.controller import DEFAULT_MISSION, build_planner, run_swarm
+from maritime_swarm.ai_control.controller import build_planner, run_swarm
 from maritime_swarm.infrastructure.environment_config import configured_model, load_dotenv
 
 
@@ -31,7 +31,9 @@ def main() -> None:
 
     http_url = os.getenv("WORLD_HTTP_URL", "http://localhost:8000").rstrip("/")
     ws_url = os.getenv("WORLD_WS_URL", "ws://localhost:8000").rstrip("/")
-    mission = os.getenv("MISSION", DEFAULT_MISSION)
+    # No MISSION env → adopt whatever mission is set in the world (e.g. typed
+    # in the frontend); the controller falls back to the default if none.
+    mission = os.getenv("MISSION") or None
     think_interval = float(os.getenv("THINK_INTERVAL", "4"))
     force_fake = os.getenv("FAKE_LLM", "0").lower() in ("1", "true", "yes")
     api_key = os.getenv("GROQ_API_KEY") or os.getenv("API_KEY")

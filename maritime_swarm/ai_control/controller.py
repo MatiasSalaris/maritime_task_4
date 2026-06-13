@@ -40,25 +40,42 @@ def _cruise_for(agent_type: str) -> float:
     return _CRUISE_BY_TYPE.get(agent_type.upper(), 25.0)
 
 
-def _prepare_world(http_url: str, mission: str) -> dict[str, Any]:
-    """Reset, set mission, and return the initial world state."""
+def _prepare_world(http_url: str, mission_override: str | None) -> tuple[dict[str, Any], str]:
+    """Reset, set the mission, and return (initial world state, mission used).
+
+    Mission precedence (so a mission typed in the frontend is respected):
+        explicit override  >  mission already set in the world  >  default.
+    The current mission is read *before* the reset (which clears it).
+    """
+    pre = requests.get(f"{http_url}/api/state", timeout=10)
+    pre.raise_for_status()
+    existing = (pre.json().get("mission") or "").strip()
+
+    mission = (mission_override or "").strip() or existing or DEFAULT_MISSION
+
     requests.post(f"{http_url}/api/reset", timeout=10).raise_for_status()
     requests.post(f"{http_url}/api/mission", json={"text": mission}, timeout=10).raise_for_status()
+
     resp = requests.get(f"{http_url}/api/state", timeout=10)
     resp.raise_for_status()
-    return resp.json()
+    return resp.json(), mission
 
 
 async def run_swarm(
     http_url: str,
     ws_url: str,
-    mission: str,
+    mission: str | None,
     planner: Planner,
     min_think_interval: float = 4.0,
 ) -> None:
-    """Run the full AI-controlled swarm until cancelled."""
-    state = await asyncio.to_thread(_prepare_world, http_url, mission)
+    """Run the full AI-controlled swarm until cancelled.
+
+    ``mission`` may be ``None`` to adopt whatever mission is already set in the
+    world model (e.g. typed in the frontend).
+    """
+    state, mission = await asyncio.to_thread(_prepare_world, http_url, mission)
     scene = Scene.from_world_state(state)
+    logger.info("Mission: %s", mission)
     registry = default_registry()
 
     agents = state.get("agents", [])
