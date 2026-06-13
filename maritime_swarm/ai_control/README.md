@@ -1,110 +1,84 @@
 # AI Control Layer
 
-The **brain** side of the swarm: a decentralised, LLM-driven coordination layer
-for the three maritime assets in the world model (`environment/backend`). It is
-kept strictly separate from the world model — it imports none of the simulator
-and talks only over the public WebSocket + REST contract. There is **no central
-planner**: coordination emerges peer-to-peer over the world model's message bus,
-which is also what the frontend renders.
+The **brain** side of the swarm: a decentralised, **open-ended LLM** coordination
+layer for the three maritime assets in the world model (`environment/backend`).
+It is kept strictly separate from the world model — it imports none of the
+simulator and talks only over the public WebSocket + REST contract. There is
+**no central planner and no keyword rules**: each asset reasons for itself and
+the team coordinates over the world model's message bus (which the frontend
+renders).
 
-## Architecture
+## How it works
+
+Each asset runs its own loop. Every ~10 s (or on an event — a new message, a new
+contact, a mission change), it makes **one LLM call** with the full situation and
+gets back reasoning + coordination messages + a single action:
 
 ```
- world model (WebSocket + REST)            AI control (this package)
- ──────────────────────────────           ─────────────────────────
-  observation (10 Hz) ───────►  WorldModelClient ──► AgentBrain ── SwarmView (shared picture)
-                                                       │
-                          ┌────────────────────────────┼─────────────────────────────┐
-                          │ STRATEGIC (leader only)     │ TACTICAL (every agent)       │
-                          │ Strategist.plan(): interpret│ Tactician.decide_reactive(): │
-                          │ mission → brief + allocation│ react to a sensed contact    │
-                          └────────────────────────────┼─────────────────────────────┘
-                                                       │
-                       baseline task (deterministic) + reactive tool (LLM-chosen)
-  apply_action ◄── action ── WorldModelClient ◄── Tool.step(obs)   (each tick)
-  p2p messages ◄── proposal / ack / status / report ──┘   (visible negotiation)
+ observation (10 Hz) ─► SwarmView (shared picture: peers, contacts, messages)
+                              │
+                 every ~10s / on event
+                              ▼
+   one LLM call:  mission (free text) + what I sense + peers + their messages
+                              │
+                 ┌────────────┴─────────────┐
+        reasoning (CoT)   messages (P2P)   action (one tool)
+                              │
+        apply_action / send P2P  →  world model (visible on the map + log)
 ```
 
-Two LLM roles, both small open-weight models via Groq:
+- **Open-ended:** the model interprets *any* order ("patrol & report", "follow
+  it at 500 m", "everybody intercept the unknown vessel", "go 5 km south",
+  "investigate the three POIs then rendezvous") and maps it to tools itself.
+  There are no `if mission contains "south"` rules — a few-shot prompt teaches
+  the format and good coordination, not specific missions.
+- **Decentralised:** no leader, no central allocation. Agents announce intent
+  and read each other's messages; convergence comes from a social convention in
+  the prompt (lower-id breaks ties; respect a peer's announced commitment; don't
+  duplicate) — "coherence without a commander."
+- **Grounded:** tools validate their arguments against the live observation /
+  shared picture, so an agent can't act on a contact or POI that doesn't exist.
 
-- **Strategist** (run by the *leader* — the lowest-id live asset, the entry
-  point for the human's mission): interprets the natural-language mission into a
-  structured brief `{objective, constraints, priority}` and proposes a division
-  of labour (`allocation`: each asset → an assignment). Broadcast as a P2P
-  `proposal`. Peers `ack` (or the plan is adjusted). If the leader goes silent,
-  the next asset takes over — no privileged node.
-- **Tactician** (every agent): the assigned **baseline task** runs
-  deterministically (patrol a sector, escort, visit POIs…); the tactician LLM is
-  consulted only to *react* to what an asset senses — investigate a contact, or
-  report it with a rationale — then the agent returns to its task.
+## Action vocabulary (tools)
 
-### Convergence without a commander
+`move(direction, km)` · `go_to(lat,lon)` · `go_to_poi(id)` · `patrol_sector(NW/NE/SW/SE/CENTER)` ·
+`investigate_contact(id)` · `report_contact(id, class, rationale)` · `escort_contact(id, standoff_m, bearing)` ·
+`visit_pois([ids], rendezvous)` · `rendezvous(poi)` · `hold_position(s)`
 
-The negotiation is LLM-driven and visible (proposals/acks on the bus). To
-guarantee it actually *converges* — the brief's "coherence without a commander"
-tension — every agent also runs an **identical, deterministic de-confliction**
-(`coordination.deconflict`) locally over the shared picture. Same inputs + same
-rule ⇒ the same allocation in every agent, with no central authority. The LLM
-provides the legible argument; the backstop guarantees no deadlock/oscillation.
-
-### Grounding
-
-Tools validate their arguments against the live observation + shared picture at
-build time (`navigation_tools`): you cannot `investigate_contact` or
-`report_contact` an id that isn't sensed or known. Symbolic targets (sectors,
-POI ids, contact ids) are used instead of raw lat/lon so the small model can't
-drift. This is the "acting on fluent nonsense" guard.
-
-## Tools
-
-| Tool | Purpose |
-|------|---------|
-| `patrol_sector(sector)` | continuously sweep a quadrant/centre — patrol baseline |
-| `go_to(lat, lon)` / `go_to_poi(poi_id)` | transit to a point / named POI |
-| `investigate_contact(contact_id)` | close on a known contact to identify it |
-| `report_contact(contact_id, classification, rationale)` | broadcast an anomaly report |
-| `escort_contact(contact_id, standoff_m, bearing_deg)` | hold a formation slot (Scenario C) |
-| `visit_pois(poi_ids, rendezvous?)` | sequential POIs then converge (Scenario D) |
-| `rendezvous(poi_id)` | converge on a point |
-| `hold_position(seconds)` | stop and observe |
-
-Assignments map to baseline tools; the tactician picks `investigate` / `report`
-reactively. Missions are **persistent** — see [persistent operations](../../).
+The model composes these to satisfy arbitrary missions. Symbolic targets
+(sectors, POI ids, contact ids) and relative `move` keep a small model accurate.
 
 ## Running
 
-The AI layer auto-starts as the `ai` service in both compose files; put your key
-in the repo-root `.env` (`GROQ_API_KEY=...`) and `docker compose up`. Or run
-standalone: `python -m maritime_swarm.ai_control` (see env vars below). Without a
-key it falls back to deterministic heuristic strategist + tactician.
+Auto-starts as the `ai` service in both compose files; put your key in the
+repo-root `.env` (`GROQ_API_KEY=...`) and `docker compose up`. Or standalone:
+`python -m maritime_swarm.ai_control`. Without a key it uses an offline
+heuristic decider.
 
 | Var | Default | Meaning |
 |-----|---------|---------|
-| `GROQ_API_KEY`/`API_KEY` | – | LLM key (quoted values tolerated) |
-| `GROQ_MODEL` | `llama-3.1-8b-instant` | model |
+| `GROQ_API_KEY`/`API_KEY` | – | LLM key |
+| `GROQ_MODEL` | `llama-3.1-8b-instant` | model — set to `llama-3.3-70b-versatile` for stronger reasoning if your key's rate limits allow |
 | `WORLD_HTTP_URL` / `WORLD_WS_URL` | localhost:8000 | world model |
 | `MISSION` | – | override (else adopts the world's mission) |
-| `FAKE_LLM` | `0` | force the offline heuristic planners |
+| `FAKE_LLM` | `0` | force the offline heuristic decider |
 
 ## Where the swarm breaks (honest limits)
 
-- **LLM rate limits.** Three agents on a free-tier key hit `429 Too Many
-  Requests` under load. Handled gracefully — the agent logs it and stays on its
-  baseline task — but heavy reactive bursts can drop individual decisions. A
-  bigger budget or local serving (Ollama) removes this.
-- **Small-model judgement.** `llama-3.1-8b-instant` occasionally mis-allocates
-  or mis-classifies; the deterministic de-confliction and grounding catch the
-  worst cases, but a 70B model is visibly better. Symbolic targets hide most
-  spatial-reasoning errors.
-- **Negotiation depth.** Convergence currently leans on the deterministic
-  backstop rather than rich multi-round objection/counter-proposal; true
-  argument is shallow (propose → ack), by design, for reliability on the clock.
-- **Shared-picture staleness.** Peer awareness is only as fresh as the last
-  `status` broadcast (every few seconds); a peer is declared silent after ~9 s.
-  Fast-moving contacts can be briefly out of date across the team.
-- **Redundant reactions.** Two assets can momentarily both react to the same new
-  contact before the report propagates; they de-duplicate once it is reported,
-  but not instantaneously.
-- **Tail-chase limits.** An asset only marginally faster than a contact closes
-  slowly; identification therefore completes at a fraction of sensor range
-  rather than on physical contact.
+- **LLM rate limits dominate.** Three agents reasoning concurrently exceed
+  Groq's free-tier tokens/minute, especially on the 70B model — decisions get
+  `429`'d. The loop handles it (staggered starts, a ~25 s backoff, and the agent
+  keeps its current action), but under heavy load the effective decision cadence
+  stretches and coordination slows. A higher-rate key (or local serving via
+  Ollama) removes this; the 8B default stays responsive.
+- **Small-model judgement.** `llama-3.1-8b-instant` keeps the swarm responsive
+  but occasionally mis-phrases a plan or picks a blunt tool; the grounding and
+  the few-shot conventions catch the worst. A 70B model is visibly sharper when
+  the rate limits allow it.
+- **Convergence is social, not guaranteed.** With no commander, two agents can
+  briefly contend for the same task before the lower-id convention settles it;
+  pathological oscillation is possible (and shown rather than hidden).
+- **Shared picture staleness.** Peer awareness is only as fresh as the last
+  status heartbeat (~4 s); a peer is treated as silent after ~12 s.
+- **Very novel phrasings** may map to a sensible default rather than the exact
+  intent — there is no hard guarantee, by design (open-ended over brittle).

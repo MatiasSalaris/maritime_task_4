@@ -20,9 +20,8 @@ import requests
 
 from maritime_swarm.ai_control.brain import AgentBrain
 from maritime_swarm.ai_control.navigation_tools import default_registry
-from maritime_swarm.ai_control.planner import GroqTactician, HeuristicTactician, TacticalPlanner
+from maritime_swarm.ai_control.planner import AgentDecider, GroqDecider, HeuristicDecider
 from maritime_swarm.ai_control.scene import Scene
-from maritime_swarm.ai_control.strategist import GroqStrategist, HeuristicStrategist, Strategist
 from maritime_swarm.ai_control.tools import ToolContext
 from maritime_swarm.ai_control.world_client import WorldModelClient
 
@@ -84,8 +83,7 @@ async def run_swarm(
     http_url: str,
     ws_url: str,
     mission: str | None,
-    strategist: Strategist,
-    tactician: TacticalPlanner,
+    decider: AgentDecider,
 ) -> None:
     """Run the full AI-controlled swarm until cancelled.
 
@@ -99,14 +97,9 @@ async def run_swarm(
 
     agents = state.get("agents", [])
     logger.info(
-        "Controlling %d agents | strategist=%s tactician=%s | area lat %.3f..%.3f lon %.3f..%.3f",
-        len(agents),
-        type(strategist).__name__,
-        type(tactician).__name__,
-        scene.bounds.lat_min,
-        scene.bounds.lat_max,
-        scene.bounds.lon_min,
-        scene.bounds.lon_max,
+        "Controlling %d agents | decider=%s | area lat %.3f..%.3f lon %.3f..%.3f",
+        len(agents), type(decider).__name__,
+        scene.bounds.lat_min, scene.bounds.lat_max, scene.bounds.lon_min, scene.bounds.lon_max,
     )
 
     brains: list[AgentBrain] = []
@@ -119,24 +112,22 @@ async def run_swarm(
             agent_type=agent_type,
             cruise_speed_kn=_cruise_for(agent_type),
             arrival_km=0.3,
-            # A contact is "identified" once well inside sensor range — no need
-            # to physically close to it, which a tail-chase makes impractical.
             identify_km=max(0.8, 0.75 * sensor_km),
             bounds=scene.bounds,
         )
         client = WorldModelClient(ws_url, a["id"])
-        brains.append(AgentBrain(client, ctx, strategist, tactician, scene, mission, registry))
+        brains.append(AgentBrain(client, ctx, decider, scene, mission, registry))
 
     await asyncio.gather(*(b.run() for b in brains))
 
 
-def build_brains(api_key: str | None, model: str, force_fake: bool = False) -> tuple[Strategist, TacticalPlanner]:
-    """Choose real-LLM planners when a key is available, else offline fallbacks."""
+def build_decider(api_key: str | None, model: str, force_fake: bool = False) -> AgentDecider:
+    """The real LLM decider when a key is available, else the offline fallback."""
     if api_key and not force_fake:
-        logger.info("Using Groq strategist + tactician (real LLM, model=%s)", model)
-        return GroqStrategist(api_key=api_key, model=model), GroqTactician(api_key=api_key, model=model)
+        logger.info("Using GroqDecider (real LLM, model=%s)", model)
+        return GroqDecider(api_key=api_key, model=model)
     logger.warning(
-        "No API key (or FAKE_LLM set) — using heuristic strategist + tactician. "
-        "Set GROQ_API_KEY for real LLM coordination."
+        "No API key (or FAKE_LLM set) — using the offline HeuristicDecider. "
+        "Set GROQ_API_KEY for real open-ended LLM coordination."
     )
-    return HeuristicStrategist(), HeuristicTactician()
+    return HeuristicDecider()

@@ -21,8 +21,13 @@ import asyncio
 import logging
 import os
 
-from maritime_swarm.ai_control.controller import build_brains, run_swarm
-from maritime_swarm.infrastructure.environment_config import configured_model, load_dotenv
+from maritime_swarm.ai_control.controller import build_decider, run_swarm
+
+# Default to a fast, high-rate-limit model so 3 agents stay responsive on a
+# free-tier key. For maximum open-ended reasoning set GROQ_MODEL to a larger
+# model (e.g. llama-3.3-70b-versatile) if your key's rate limits allow it.
+_DEFAULT_MODEL = "llama-3.1-8b-instant"
+from maritime_swarm.infrastructure.environment_config import load_dotenv
 
 
 def _clean(value: str | None, default: str = "") -> str:
@@ -45,12 +50,12 @@ def main() -> None:
     # Strip surrounding quotes/whitespace: Docker Compose env_file passes values
     # literally (a quoted .env value would otherwise carry the quotes through).
     api_key = _clean(os.getenv("GROQ_API_KEY") or os.getenv("API_KEY")) or None
-    model = _clean(os.getenv("GROQ_MODEL")) or configured_model()
+    model = _clean(os.getenv("GROQ_MODEL")) or _DEFAULT_MODEL
 
-    strategist, tactician = build_brains(api_key, model, force_fake=force_fake)
+    decider = build_decider(api_key, model, force_fake=force_fake)
 
     try:
-        asyncio.run(run_swarm(http_url, ws_url, mission, strategist, tactician))
+        asyncio.run(run_swarm(http_url, ws_url, mission, decider))
     except KeyboardInterrupt:
         print("\nShutting down AI control.")
 

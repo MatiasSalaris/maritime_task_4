@@ -15,7 +15,14 @@ import math
 from typing import Any
 
 from maritime_swarm.ai_control import coordination as coord
-from maritime_swarm.ai_control.geo import bearing_deg, haversine_km
+from maritime_swarm.ai_control.geo import bearing_deg, destination, haversine_km
+
+_COMPASS = {
+    "north": 0, "n": 0, "northeast": 45, "ne": 45, "north-east": 45,
+    "east": 90, "e": 90, "southeast": 135, "se": 135, "south-east": 135,
+    "south": 180, "s": 180, "southwest": 225, "sw": 225, "south-west": 225,
+    "west": 270, "w": 270, "northwest": 315, "nw": 315, "north-west": 315,
+}
 from maritime_swarm.ai_control.observation import Observation
 from maritime_swarm.ai_control.tools import (
     Tool,
@@ -96,6 +103,50 @@ class GoToTool(Tool):
 
     def describe(self) -> str:
         return f"go_to({self.lat:.4f}, {self.lon:.4f})"
+
+
+# ── move (relative, directional) ───────────────────────────────────────────────
+class MoveTool(Tool):
+    name = "move"
+    description = ("Move a distance in a compass direction from your CURRENT position "
+                   "(e.g. 5 km south). Use for directional/relative orders.")
+    parameters = {
+        "direction": {"type": "string", "description": "compass direction (north, south, east, west, NE, NW, SE, SW) or a bearing in degrees"},
+        "distance_km": {"type": "number", "description": "how far to move, in kilometres", "required": False},
+    }
+
+    def __init__(self, lat: float, lon: float, label: str) -> None:
+        self.lat, self.lon, self._label = lat, lon, label
+
+    @classmethod
+    def build(cls, args: dict[str, Any], ctx: ToolContext) -> "MoveTool":
+        raw = require_str(args, "direction").lower().strip()
+        if raw in _COMPASS:
+            bearing = float(_COMPASS[raw])
+        else:
+            try:
+                bearing = float(raw) % 360.0
+            except ValueError:
+                raise ToolError(f"unknown direction '{raw}'")
+        dist = float(args.get("distance_km") or 5.0)
+        dist = max(0.3, min(60.0, dist))
+        if ctx.obs is None:
+            raise ToolError("move needs a current position")
+        lat, lon = destination(ctx.obs.lat, ctx.obs.lon, bearing, dist)
+        if ctx.bounds is not None:
+            lat, lon = ctx.bounds.clamp_point(lat, lon)
+        return cls(lat, lon, f"{dist:.0f}km bearing {bearing:.0f}")
+
+    def step(self, obs: Observation, ctx: ToolContext) -> ToolInvocation:
+        dist = haversine_km(obs.lat, obs.lon, self.lat, self.lon)
+        if dist <= ctx.arrival_km:
+            return ToolInvocation(_stop(f"On station @ {self.lat:.3f}, {self.lon:.3f}"), ToolStatus.DONE, "arrived")
+        return ToolInvocation(
+            _steer(obs, self.lat, self.lon, ctx, f"Proceeding {self._label} → {self.lat:.3f}, {self.lon:.3f}"),
+            ToolStatus.RUNNING, f"{dist:.2f} km")
+
+    def describe(self) -> str:
+        return f"move({self._label})"
 
 
 # ── go_to_poi (symbolic) ───────────────────────────────────────────────────────
@@ -455,7 +506,7 @@ def default_registry() -> ToolRegistry:
     """The full maritime toolset (covers patrol/report, escort, search & rendezvous)."""
     registry = ToolRegistry()
     for tool in (
-        GoToTool, GoToPoiTool, PatrolSectorTool, InvestigateContactTool,
+        GoToTool, MoveTool, GoToPoiTool, PatrolSectorTool, InvestigateContactTool,
         ReportContactTool, EscortContactTool, VisitPoisTool, RendezvousTool,
         HoldPositionTool,
     ):
