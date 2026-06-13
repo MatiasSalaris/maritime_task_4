@@ -1,0 +1,129 @@
+stefanoroybisignano@MacBook-Air-di-Stefano-2 maritime_task_4 % clear
+stefanoroybisignano@MacBook-Air-di-Stefano-2 maritime_task_4 % python -m py_compile simulation.py
+python simulation.py
+00.00s [SIM] starting deterministic shared-situational-picture swarm with real LLM model=llama-3.1-8b-instant
+00.00s [BUS] USV-1 subscribed
+00.00s [USV-1] online
+00.00s [USV-1] STATE_TIERS physical={'pos': (10.0, 20.0), 'battery': 72.0, 'sensor_quality': 0.82, 'raw_contacts': []}; cognitive={'local_beliefs': {}, 'local_intent': 'awaiting operator mission intent'}; distributed={'mission_intent': None, 'shared_contacts': {}, 'global_tasks': {}}
+00.00s [BUS] USV-2 subscribed
+00.00s [USV-2] online
+00.00s [USV-2] STATE_TIERS physical={'pos': (42.0, 36.0), 'battery': 91.0, 'sensor_quality': 0.74, 'raw_contacts': []}; cognitive={'local_beliefs': {}, 'local_intent': 'awaiting operator mission intent'}; distributed={'mission_intent': None, 'shared_contacts': {}, 'global_tasks': {}}
+00.00s [BUS] USV-3 subscribed
+00.00s [USV-3] online
+00.00s [USV-3] STATE_TIERS physical={'pos': (92.0, 18.0), 'battery': 64.0, 'sensor_quality': 0.95, 'raw_contacts': []}; cognitive={'local_beliefs': {}, 'local_intent': 'awaiting operator mission intent'}; distributed={'mission_intent': None, 'shared_contacts': {}, 'global_tasks': {}}
+00.50s [OPERATOR] NLP mission assignment: 'Find the missing buoy in this region, prioritise speed, and stop once it is detected.'
+00.50s [SIM] operator_pos=(0.0, 0.0); closest entry node=USV-1 at pos=(10.0, 20.0)
+00.50s [USV-1] LLM_CALL mission reformulation using llama-3.1-8b-instant
+00.91s [USV-1] DIRECT_OPERATOR_NLP received by proximity (22.4m). Acting as temporary entry node.
+00.91s [USV-1] OPERATOR_NLP raw='Find the missing buoy in this region, prioritise speed, and stop once itis detected.'
+00.91s [USV-1] ENTRY_NODE parsed mission={'objective': 'Locate and detect the missing buoy in the region', 'constraints': ['Maintain a formation with peer agents, report detection of the buoy to the swarm'], 'priority': 'Speed', 'local_intent': 'Locate the missing buoy while maintaining formation with peer agents and reporting detection to the swarm.'}; broadcasting MISSION_INTENT to peers
+00.91s [BUS] broadcast MISSION_INTENT from USV-1 to 3 agents
+00.91s [USV-1] DISTRIBUTED mission_intent accepted from USV-1: id=M-001, objective=Locate and detect the missing buoy in the region, priority=Speed
+00.91s [USV-1] COGNITIVE local_intent -> 'Locate the missing buoy while maintaining formation with peer agents and reporting detection to the swarm.'
+00.91s [USV-2] DISTRIBUTED mission_intent accepted from USV-1: id=M-001, objective=Locate and detect the missing buoy in the region, priority=Speed
+00.91s [USV-2] COGNITIVE local_intent -> 'Locate the missing buoy while maintaining formation with peer agents and reporting detection to the swarm.'
+00.91s [USV-3] DISTRIBUTED mission_intent accepted from USV-1: id=M-001, objective=Locate and detect the missing buoy in the region, priority=Speed
+00.91s [USV-3] COGNITIVE local_intent -> 'Locate the missing buoy while maintaining formation with peer agents and reporting detection to the swarm.'
+01.41s [SIM] T=1.0 mission context has been broadcast; assign search_north_sector before buoy is found
+01.41s [BUS] broadcast TASK_TRIGGER from SIM to 3 agents
+01.41s [USV-1] TASK_TRIGGER search_north_sector; utility = 0.5*0.495 + 0.3*0.720 + 0.2*0.820 = 0.627
+01.41s [BUS] broadcast TASK_BID from USV-1 to 3 agents
+01.41s [USV-1] DISTRIBUTED global_tasks[search_north_sector].bids[USV-1]=0.627
+01.41s [USV-2] TASK_TRIGGER search_north_sector; utility = 0.5*0.719 + 0.3*0.910 + 0.2*0.740 = 0.780
+01.41s [BUS] broadcast TASK_BID from USV-2 to 3 agents
+01.41s [USV-2] DISTRIBUTED global_tasks[search_north_sector].bids[USV-1]=0.627
+01.41s [USV-2] DISTRIBUTED global_tasks[search_north_sector].bids[USV-2]=0.780
+01.41s [USV-3] TASK_TRIGGER search_north_sector; utility = 0.5*0.544 + 0.3*0.640 + 0.2*0.950 = 0.654
+01.41s [BUS] broadcast TASK_BID from USV-3 to 3 agents
+01.41s [USV-3] DISTRIBUTED global_tasks[search_north_sector].bids[USV-1]=0.627
+01.41s [USV-3] DISTRIBUTED global_tasks[search_north_sector].bids[USV-2]=0.780
+01.41s [USV-3] DISTRIBUTED global_tasks[search_north_sector].bids[USV-3]=0.654
+01.41s [USV-1] DISTRIBUTED global_tasks[search_north_sector].bids[USV-2]=0.780
+01.41s [USV-1] DISTRIBUTED global_tasks[search_north_sector].bids[USV-3]=0.654
+01.41s [USV-2] DISTRIBUTED global_tasks[search_north_sector].bids[USV-3]=0.654
+01.91s [USV-1] ARGMAX bids for search_north_sector: {USV-1: 0.627, USV-2: 0.780, USV-3: 0.654} -> winner=USV-2 (0.780)
+01.91s [USV-1] LLM_CALL decision trace using llama-3.1-8b-instant
+01.91s [USV-2] ARGMAX bids for search_north_sector: {USV-1: 0.627, USV-2: 0.780, USV-3: 0.654} -> winner=USV-2 (0.780)
+01.91s [USV-2] LLM_CALL decision trace using llama-3.1-8b-instant
+01.91s [USV-3] ARGMAX bids for search_north_sector: {USV-1: 0.627, USV-2: 0.780, USV-3: 0.654} -> winner=USV-2 (0.780)
+01.91s [USV-3] LLM_CALL decision trace using llama-3.1-8b-instant
+02.20s [USV-2] DECISION_TRACE **Decision Trace:**
+
+- **Step 1:** Received task assignment for search_north_sector with a winning utility of 0.780.
+- **Step 2:** Executing assigned task search_north_sector as the winning agent USV-2.
+02.20s [USV-1] DECISION_TRACE **Decision Trace:**
+
+- **Event:** Deterministic utility bidding assigned a search sector before mission success.
+- **Winner:** USV-2 with a winning utility of 0.780
+- **Outcome:** I (USV-1) am yielding the search_north_sector task to USV-2.
+02.24s [USV-3] DECISION_TRACE **Decision Trace:**
+
+- **Event**: Deterministic utility bidding assigned a search sector before mission success.
+- **Outcome**: I (USV-3) yielded the search_north_sector task to USV-2, as USV-2 had the highest winning utility (0.780) in the bidding process.
+
+**Current Status:** I am reassigned to a new task, awaiting further instructions.
+02.41s [SIM] T=2.0 obstacle before mission success: USV-2 cannot continue north
+02.41s [USV-2] LOCAL_OBSTACLE_DETECTED {'id': 'O9', 'hypothesis': 'obstacle', 'observer': 'USV-2', 'pos':(54.0, 52.0), 'blocks_direction': 'north'}; handling locally without peer validation
+02.41s [USV-2] OBSTACLE O9 on route while executing search_north_sector; state -> EVALUATING
+02.61s [USV-2] NORTH_BLOCKED by O9; broadcasting HANDOFF_REQUEST for handoff_north_sector_from_USV-2; continuing alternate_east_sweep
+02.61s [BUS] broadcast HANDOFF_REQUEST from USV-2 to 3 agents
+02.61s [USV-1] DISTRIBUTED handoff request handoff_north_sector_from_USV-2 from USV-2: reason='USV-2 cannot safely continue north around O9'
+02.61s [USV-1] HANDOFF_BID handoff_north_sector_from_USV-2; utility = 0.5*0.495 + 0.3*0.720 + 0.2*0.820 =0.627
+02.61s [BUS] broadcast TASK_BID from USV-1 to 3 agents
+02.61s [USV-1] DISTRIBUTED global_tasks[handoff_north_sector_from_USV-2].bids[USV-1]=0.627
+02.61s [USV-2] DISTRIBUTED handoff request handoff_north_sector_from_USV-2 from USV-2: reason='USV-2 cannot safely continue north around O9'
+02.61s [USV-2] HANDOFF_REQUEST acknowledged locally; I will not bid on blocked sector handoff_north_sector_from_USV-2
+02.61s [USV-2] DISTRIBUTED global_tasks[handoff_north_sector_from_USV-2].bids[USV-1]=0.627
+02.61s [USV-3] DISTRIBUTED handoff request handoff_north_sector_from_USV-2 from USV-2: reason='USV-2 cannot safely continue north around O9'
+02.61s [USV-3] HANDOFF_BID handoff_north_sector_from_USV-2; utility = 0.5*0.544 + 0.3*0.640 + 0.2*0.950 =0.654
+02.61s [BUS] broadcast TASK_BID from USV-3 to 3 agents
+02.61s [USV-3] DISTRIBUTED global_tasks[handoff_north_sector_from_USV-2].bids[USV-1]=0.627
+02.61s [USV-3] DISTRIBUTED global_tasks[handoff_north_sector_from_USV-2].bids[USV-3]=0.654
+02.61s [USV-1] DISTRIBUTED global_tasks[handoff_north_sector_from_USV-2].bids[USV-3]=0.654
+02.61s [USV-2] DISTRIBUTED global_tasks[handoff_north_sector_from_USV-2].bids[USV-3]=0.654
+03.11s [USV-1] ARGMAX bids for handoff_north_sector_from_USV-2: {USV-1: 0.627, USV-3: 0.654} -> winner=USV-3 (0.654)
+03.11s [USV-1] LLM_CALL decision trace using llama-3.1-8b-instant
+03.11s [USV-2] ARGMAX bids for handoff_north_sector_from_USV-2: {USV-1: 0.627, USV-3: 0.654} -> winner=USV-3 (0.654)
+03.12s [USV-2] LLM_CALL decision trace using llama-3.1-8b-instant
+03.12s [USV-3] ARGMAX bids for handoff_north_sector_from_USV-2: {USV-1: 0.627, USV-3: 0.654} -> winner=USV-3 (0.654)
+03.12s [USV-3] LLM_CALL decision trace using llama-3.1-8b-instant
+03.38s [USV-3] DECISION_TRACE **Decision Trace:**
+
+- **Event**: Deterministic handoff bidding completed.
+- **Reason**: USV-2 cannot safely continue north around O9.
+- **Winner**: USV-3 (myself)
+- **Winning Utility**: 0.654
+- **Action**: Executing handoff_north_sector_from_USV-2 as assigned winner.
+03.39s [USV-2] DECISION_TRACE Decision Trace:
+
+- **Event**: Deterministic handoff bidding completed.
+- **Reason**: USV-2 cannot safely continue north around O9.
+- **Winner**: USV-3 with a utility of 0.654.
+- **Action**: Handed off task handoff_north_sector_from_USV-2 to USV-3 and reassigned to continue in an alternate safe direction.
+03.41s [USV-1] DECISION_TRACE **Decision Trace:**
+
+- **Event**: Deterministic handoff bidding completed.
+- **Reason**: USV-2 cannot safely continue north around O9, necessitating a handoff.
+- **Winner**: USV-3 with a utility of 0.654.
+- **Outcome**: I (USV-1) yield the task to USV-3, as it has the highest utility for completing the handoff_north_sector_from_USV-2 task.
+03.71s [SIM] T=3.3 handoff winner reaches search area and detects buoy C17
+03.71s [USV-3] BUOY_DETECTED locally {'id': 'C17', 'hypothesis': 'buoy', 'observer': 'USV-3', 'pos': (58.0, 72.0)}; treating as certain mission contact
+03.71s [BUS] broadcast BUOY_DETECTED from USV-3 to 3 agents
+03.71s [USV-1] DISTRIBUTED shared_contacts[C17] <- buoy detected_by=USV-3 pos=(58.0, 72.0); accepted without peer comparison
+03.71s [USV-1] MISSION_COMPLETE buoy=C17 detected_by=USV-3; stopping active tasking
+03.71s [USV-2] DISTRIBUTED shared_contacts[C17] <- buoy detected_by=USV-3 pos=(58.0, 72.0); accepted without peer comparison
+03.71s [USV-2] MISSION_COMPLETE buoy=C17 detected_by=USV-3; stopping active tasking
+03.71s [USV-3] DISTRIBUTED shared_contacts[C17] <- buoy detected_by=USV-3 pos=(58.0, 72.0); accepted without peer comparison
+03.71s [USV-3] MISSION_COMPLETE buoy=C17 detected_by=USV-3; stopping active tasking
+04.52s [SIM] final distributed snapshots
+04.52s [SIM] USV-1: mode=IDLE, active_task=None, mission=M-001 status=complete completed_by=USV-3 via=USV-1, C17=buoy detected_by=USV-3 policy=single asset detection is sufficient, local_obstacles=[], search_winner=USV-2 search_status=closed_by_success avoidance=None, handoff_winner=USV-3 handoff_bids={USV-1: 0.627,USV-3: 0.654}
+04.52s [SIM] USV-2: mode=IDLE, active_task=None, mission=M-001 status=complete completed_by=USV-3 via=USV-1, C17=buoy detected_by=USV-3 policy=single asset detection is sufficient, local_obstacles=['O9'], search_winner=USV-2 search_status=closed_by_success avoidance={'obstacle_id': 'O9', 'obstacle_pos': (54.0, 52.0), 'policy': 'north blocked; hand off blocked sector and continue alternate direction'}, handoff_winner=USV-3 handoff_bids={USV-1: 0.627, USV-3: 0.654}
+04.52s [SIM] USV-3: mode=IDLE, active_task=None, mission=M-001 status=complete completed_by=USV-3 via=USV-1, C17=buoy detected_by=USV-3 policy=single asset detection is sufficient, local_obstacles=[], search_winner=USV-2 search_status=closed_by_success avoidance=None, handoff_winner=USV-3 handoff_bids={USV-1: 0.627,USV-3: 0.654}
+04.52s [BUS] USV-1 unsubscribed
+04.52s [USV-1] shutdown complete
+04.52s [BUS] USV-2 unsubscribed
+04.52s [USV-2] shutdown complete
+04.52s [BUS] USV-3 unsubscribed
+04.52s [USV-3] shutdown complete
+04.52s [SIM] simulation complete
+stefanoroybisignano@MacBook-Air-di-Stefano-2 maritime_task_4 % 
