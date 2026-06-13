@@ -34,6 +34,11 @@ class MessageBus:
     def log_dicts(self, n: int = 100) -> list[dict]:
         return [m.model_dump() for m in self._log[-n:]]
 
+    def clear(self) -> None:
+        self._inbox.clear()
+        self._log.clear()
+        self._in_flight.clear()
+
 
 # Module-level singleton
 message_bus = MessageBus()

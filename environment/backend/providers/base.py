@@ -44,5 +44,14 @@ class AbstractPlatformProvider(ABC):
         """Append a CoT chunk to the agent's visible thought text."""
         ...
 
+    async def reset(self) -> None:
+        """Clear all agent path history, CoT, tasks, and mission state."""
+
+    async def set_doctrine(self, code: str) -> None:
+        """Set NATO doctrine/ROE profile."""
+
+    async def set_aor(self, geojson: dict | None) -> None:
+        """Set operating area as GeoJSON Polygon (None = clear)."""
+
     async def tick(self, dt: float) -> None:
         """Advance sim time by dt seconds. No-op for hardware (time is real)."""

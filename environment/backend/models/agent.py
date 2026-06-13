@@ -40,6 +40,7 @@ class Action(BaseModel):
     speed_kn: Optional[float] = None
     planned_path: Optional[list[Position]] = None
     current_task: Optional[str] = None
+    warp_to: Optional[Position] = None   # direct position set (demo / testing)
 
 
 class Observation(BaseModel):

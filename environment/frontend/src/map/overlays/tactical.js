@@ -20,9 +20,20 @@ export const tactical = {
       },
     },
     layers: [
-      { id: 'base',     type: 'raster', source: 'base' },
-      { id: 'seamarks', type: 'raster', source: 'seamarks',
-        paint: { 'raster-opacity': 0.75 } },
+      {
+        id: 'base', type: 'raster', source: 'base',
+        paint: {
+          'raster-opacity': 1.0,
+          'raster-brightness-min': 0.0,
+          'raster-brightness-max': 1.0,
+          'raster-saturation': 0.0,
+          'raster-contrast': 0.0,
+        },
+      },
+      {
+        id: 'seamarks', type: 'raster', source: 'seamarks',
+        paint: { 'raster-opacity': 0.75 },
+      },
     ],
   },
 }

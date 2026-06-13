@@ -1,8 +1,9 @@
 <script>
   import { worldState, wsStatus, selectedAgentId } from '../store/worldStore.js'
-  import MissionBox  from './MissionBox.svelte'
-  import AgentCard   from './AgentCard.svelte'
-  import MessageLog  from './MessageLog.svelte'
+  import MissionBox   from './MissionBox.svelte'
+  import AgentCard    from './AgentCard.svelte'
+  import MessageLog   from './MessageLog.svelte'
+  import DemoControls from './DemoControls.svelte'
 
   const STATUS_DOT = { connected: '#00ff88', disconnected: '#ff3355', reconnecting: '#ffaa00' }
 </script>
@@ -16,6 +17,9 @@
       <span class="ws-label">{$wsStatus.toUpperCase()}</span>
     </div>
   </div>
+
+  <!-- Demo controls -->
+  <DemoControls />
 
   <!-- Mission -->
   <MissionBox />
@@ -40,7 +44,7 @@
 
 <style>
   .panel {
-    width: 360px;
+    width: 420px;
     flex-shrink: 0;
     background: #060c18;
     border-right: 1px solid #1a2a3a;
@@ -55,26 +59,32 @@
     display: flex;
     align-items: center;
     justify-content: space-between;
-    padding: 12px 14px;
+    padding: 14px 16px;
     border-bottom: 1px solid #1a2a3a;
     flex-shrink: 0;
   }
   .brand {
-    font-size: 12px;
+    font-size: 14px;
     font-weight: bold;
     letter-spacing: 0.15em;
     color: #00d4ff;
   }
-  .ws-status { display: flex; align-items: center; gap: 5px; }
-  .ws-dot    { width: 7px; height: 7px; border-radius: 50%; }
-  .ws-label  { font-size: 8px; letter-spacing: 0.1em; color: #4a7a9a; }
+  .ws-status { display: flex; align-items: center; gap: 6px; }
+  .ws-dot    { width: 8px; height: 8px; border-radius: 50%; }
+  .ws-label  { font-size: 11px; letter-spacing: 0.1em; color: #4a7a9a; }
 
-  .agents-section { flex-shrink: 0; }
+  .agents-section {
+    flex-shrink: 0;
+    max-height: 48vh;
+    overflow-y: auto;
+    scrollbar-width: thin;
+    scrollbar-color: #1a3a5a transparent;
+  }
   .section-title {
-    font-size: 9px;
+    font-size: 11px;
     letter-spacing: 0.12em;
     color: #4a7a9a;
-    padding: 10px 12px 6px;
+    padding: 11px 14px 7px;
     border-bottom: 1px solid #111e2a;
   }
 </style>

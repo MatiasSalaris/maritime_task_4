@@ -1,4 +1,4 @@
-// Classic nautical chart style
+// Classic nautical chart — OSM tiles darkened for tactical contrast
 export const nautical = {
   id: 'nautical',
   label: 'Nautical',
@@ -19,9 +19,21 @@ export const nautical = {
       },
     },
     layers: [
-      { id: 'base',     type: 'raster', source: 'base' },
-      { id: 'seamarks', type: 'raster', source: 'seamarks',
-        paint: { 'raster-opacity': 0.9 } },
+      {
+        id: 'base', type: 'raster', source: 'base',
+        // OSM is white/light — crush brightness so agent glows pop
+        paint: {
+          'raster-opacity': 1.0,
+          'raster-brightness-min': 0.0,
+          'raster-brightness-max': 0.45,
+          'raster-saturation': -0.50,
+          'raster-contrast': 0.10,
+        },
+      },
+      {
+        id: 'seamarks', type: 'raster', source: 'seamarks',
+        paint: { 'raster-opacity': 0.88 },
+      },
     ],
   },
 }

@@ -31,7 +31,7 @@
   function ts(unix) {
     if (!unix) return ''
     const d = new Date(unix * 1000)
-    return d.toTimeString().slice(0,8)
+    return d.toTimeString().slice(0, 8)
   }
 </script>
 
@@ -46,7 +46,7 @@
         </span>
         <span class="from" style="color:{agentColor(msg.from_agent)}">{agentName(msg.from_agent)}</span>
         <span class="arrow">→</span>
-        <span class="to" style="color:{agentColor(msg.to_agent)}">{agentName(msg.to_agent)}</span>
+        <span class="to"   style="color:{agentColor(msg.to_agent)}">{agentName(msg.to_agent)}</span>
         <span class="type" style="color:{TYPE_COLOR[msg.msg_type] ?? '#888'}">{msg.msg_type}</span>
       </div>
       {#if msg.reasoning}
@@ -65,45 +65,45 @@
     display: flex;
     flex-direction: column;
     min-height: 0;
-    padding: 10px 0 0 0;
+    padding-top: 10px;
   }
   .title {
-    font-size: 9px;
+    font-size: 11px;
     letter-spacing: 0.12em;
     color: #4a7a9a;
-    padding: 0 12px 6px 12px;
+    padding: 0 14px 7px 14px;
     flex-shrink: 0;
   }
   .log {
     flex: 1;
     overflow-y: auto;
-    padding: 0 12px 12px 12px;
+    padding: 0 14px 14px 14px;
     scrollbar-width: thin;
     scrollbar-color: #1a3a5a transparent;
   }
   .entry {
     display: flex;
     align-items: center;
-    gap: 4px;
-    font-size: 10px;
-    padding: 3px 0;
+    gap: 5px;
+    font-size: 12px;
+    padding: 4px 0;
     border-bottom: 1px solid #0d1820;
     flex-wrap: wrap;
   }
-  .ts     { color: #3a5a7a; font-family: monospace; flex-shrink: 0; }
-  .icon   { font-size: 9px; flex-shrink: 0; }
+  .ts     { color: #3a5a7a; font-family: monospace; flex-shrink: 0; font-size: 11px; }
+  .icon   { font-size: 11px; flex-shrink: 0; }
   .from, .to { font-weight: bold; }
   .arrow  { color: #3a5a7a; }
-  .type   { font-size: 9px; letter-spacing: 0.05em; margin-left: auto; }
+  .type   { font-size: 10px; letter-spacing: 0.05em; margin-left: auto; }
   .reasoning {
-    font-size: 9px;
+    font-size: 11px;
     color: #6a9ab0;
     font-family: monospace;
-    padding: 2px 8px 4px 8px;
-    line-height: 1.4;
+    padding: 3px 8px 5px 8px;
+    line-height: 1.45;
     border-left: 2px solid #1a3a5a;
-    margin-left: 12px;
+    margin-left: 14px;
     margin-bottom: 2px;
   }
-  .empty  { font-size: 10px; color: #3a5a7a; text-align: center; padding: 20px; }
+  .empty { font-size: 13px; color: #3a5a7a; text-align: center; padding: 24px; }
 </style>

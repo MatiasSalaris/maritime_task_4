@@ -1,4 +1,4 @@
-// Ocean depth (GEBCO bathymetry) — great for maritime ops look
+// Ocean depth — Stamen Watercolor darkened for ops readability
 export const bathymetric = {
   id: 'bathymetric',
   label: 'Bathymetric',
@@ -21,9 +21,21 @@ export const bathymetric = {
       },
     },
     layers: [
-      { id: 'base',     type: 'raster', source: 'base' },
-      { id: 'seamarks', type: 'raster', source: 'seamarks',
-        paint: { 'raster-opacity': 0.7 } },
+      {
+        id: 'base', type: 'raster', source: 'base',
+        // Watercolor is very bright & warm — darken and desaturate for legibility
+        paint: {
+          'raster-opacity': 1.0,
+          'raster-brightness-min': 0.0,
+          'raster-brightness-max': 0.52,
+          'raster-saturation': -0.30,
+          'raster-contrast': 0.10,
+        },
+      },
+      {
+        id: 'seamarks', type: 'raster', source: 'seamarks',
+        paint: { 'raster-opacity': 0.80 },
+      },
     ],
   },
 }

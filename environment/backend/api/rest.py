@@ -39,6 +39,34 @@ async def get_messages(n: int = 100) -> dict:
     return {"messages": message_bus.log_dicts(n)}
 
 
+class DoctrinePayload(BaseModel):
+    code: str  # PHASE0 | PHASE1 | MSO | PHASE2 | PHASE3
+
+
+class AORPayload(BaseModel):
+    geometry: dict | None = None  # GeoJSON Polygon or None to clear
+
+
+@router.post("/doctrine")
+async def set_doctrine(body: DoctrinePayload) -> dict:
+    await app_state.engine.provider.set_doctrine(body.code)
+    return {"ok": True, "doctrine": body.code}
+
+
+@router.post("/aor")
+async def set_aor(body: AORPayload) -> dict:
+    await app_state.engine.provider.set_aor(body.geometry)
+    return {"ok": True}
+
+
+@router.post("/reset")
+async def reset_sim() -> dict:
+    """Clear all path history, CoT, tasks, mission, and message log. Call before each demo run."""
+    await app_state.engine.provider.reset()
+    message_bus.clear()
+    return {"ok": True}
+
+
 @router.post("/agents/{agent_id}/status")
 async def set_agent_status(agent_id: str, body: AgentStatusPayload) -> dict:
     """Force-set an agent's status (e.g., simulate comm disruption)."""

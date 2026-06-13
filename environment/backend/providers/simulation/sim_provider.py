@@ -12,7 +12,8 @@ from providers.simulation.synthetic_ais import initial_contacts
 # ── Demo area: Strait of Sicily ───────────────────────────────────────────────
 _BOUNDS = dict(lat_min=37.42, lat_max=37.60, lon_min=15.00, lon_max=15.28)
 _SENSOR_RANGE_KM = 12.0
-_MAX_HISTORY = 120   # path history points kept per agent
+_MAX_HISTORY = 400   # path history points kept per agent
+_MIN_HIST_DIST_M = 8 # minimum movement to record a new history point
 _AGENT_COLORS = ["#00d4ff", "#00ff88", "#ff8800"]
 
 
@@ -24,6 +25,8 @@ class SimulatedPlatformProvider(AbstractPlatformProvider):
         self.pois: list[POI] = self._init_pois()
         self.geofences: list[Geofence] = self._init_geofences()
         self.mission: str | None = None
+        self.doctrine: str | None = None
+        self.aor: dict | None = None
         self.world_time: float = time.time()
 
     # ── Initialisation ────────────────────────────────────────────────────────
@@ -41,7 +44,7 @@ class SimulatedPlatformProvider(AbstractPlatformProvider):
                 heading=180, speed_kn=8.0,
             ),
             AgentState(
-                id="agent_2", name="Charlie", type=AgentType.USV,
+                id="agent_2", name="Charlie", type=AgentType.UAV,
                 position=Position(lat=37.545, lon=15.17),
                 heading=270, speed_kn=8.0,
             ),
@@ -106,11 +109,19 @@ class SimulatedPlatformProvider(AbstractPlatformProvider):
         if parsed.heading is not None:
             agent.heading = parsed.heading % 360
         if parsed.speed_kn is not None:
-            agent.speed_kn = max(0.0, min(25.0, parsed.speed_kn))
+            agent.speed_kn = max(0.0, min(100.0, parsed.speed_kn))
         if parsed.planned_path is not None:
             agent.planned_path = parsed.planned_path
         if parsed.current_task is not None:
             agent.current_task = parsed.current_task
+        if parsed.warp_to is not None:
+            # Only record history if we've moved far enough (avoids flooding)
+            ref = agent.path_history[-1] if agent.path_history else agent.position
+            if distance_km(ref, parsed.warp_to) * 1000 >= _MIN_HIST_DIST_M:
+                agent.path_history.append(Position(lat=agent.position.lat, lon=agent.position.lon))
+                if len(agent.path_history) > _MAX_HISTORY:
+                    agent.path_history = agent.path_history[-_MAX_HISTORY:]
+            agent.position = parsed.warp_to
 
     async def get_world_state(self) -> WorldState:
         return WorldState(
@@ -120,7 +131,15 @@ class SimulatedPlatformProvider(AbstractPlatformProvider):
             pois=list(self.pois),
             geofences=list(self.geofences),
             mission=self.mission,
+            doctrine=self.doctrine,
+            aor=self.aor,
         )
+
+    async def set_doctrine(self, code: str) -> None:
+        self.doctrine = code
+
+    async def set_aor(self, geojson: dict | None) -> None:
+        self.aor = geojson
 
     async def set_mission(self, mission: str) -> None:
         self.mission = mission
@@ -131,6 +150,14 @@ class SimulatedPlatformProvider(AbstractPlatformProvider):
             agent.connected = connected
             if not connected:
                 agent.cot_text = ""
+
+    async def reset(self) -> None:
+        for agent in self.agents:
+            agent.path_history = []
+            agent.planned_path = []
+            agent.cot_text = ''
+            agent.current_task = None
+        self.mission = None
 
     async def update_agent_cot(self, agent_id: str, chunk: str) -> None:
         agent = self._agent(agent_id)
@@ -162,7 +189,7 @@ class SimulatedPlatformProvider(AbstractPlatformProvider):
                 agent.heading = (360 - agent.heading) % 360
                 bounced = True
 
-            if not bounced:
+            if not bounced and agent.speed_kn > 0:
                 agent.position = new_pos
                 agent.path_history.append(Position(lat=new_pos.lat, lon=new_pos.lon))
                 if len(agent.path_history) > _MAX_HISTORY:

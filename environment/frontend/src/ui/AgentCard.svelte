@@ -16,10 +16,16 @@
     silent:      '#ff3355',
   }
 
+  const TYPE_META = {
+    USV: { label: '⛵ SURFACE', bg: '#001a2e', border: '#0055aa', text: '#4499dd' },
+    UAV: { label: '✈ AERIAL',  bg: '#1a001a', border: '#8800cc', text: '#cc66ff' },
+  }
+
   $: color      = agentColor(agent.id)
   $: statusText = STATUS_LABEL[agent.status]  ?? agent.status
   $: statusClr  = STATUS_COLOR[agent.status]  ?? '#ffffff'
   $: cotLines   = (agent.cot_text ?? '').split('\n').slice(-6).join('\n')
+  $: typeMeta   = TYPE_META[(agent.type ?? '').toUpperCase()] ?? TYPE_META.USV
 
   function fmt(n) { return n?.toFixed(1) ?? '—' }
 
@@ -41,7 +47,10 @@
     <div class="name-row">
       <span class="dot" style="background:{color}"></span>
       <span class="name">{agent.name}</span>
-      <span class="type">{agent.type}</span>
+      <span class="type-badge"
+            style="background:{typeMeta.bg};border-color:{typeMeta.border};color:{typeMeta.text}">
+        {typeMeta.label}
+      </span>
       {#if agent.connected}
         <span class="connected-badge">AI</span>
       {/if}
@@ -75,7 +84,6 @@
     </div>
   {/if}
 
-  <!-- Controls (comm disruption etc) -->
   <div class="controls">
     {#if agent.status !== 'silent'}
       <button class="ctrl-btn danger" title="Simulate comms loss"
@@ -93,58 +101,61 @@
 
 <style>
   .card {
-    border-left: 2px solid var(--agent-color);
-    padding: 10px 12px;
+    border-left: 3px solid var(--agent-color);
+    padding: 12px 14px;
     border-bottom: 1px solid #111e2a;
     cursor: pointer;
     transition: background 0.15s;
   }
-  .card:hover   { background: #0d1a26; }
-  .card.selected{ background: #0d2030; }
+  .card:hover    { background: #0d1a26; }
+  .card.selected { background: #0d2030; }
 
-  .header { display: flex; justify-content: space-between; align-items: flex-start; margin-bottom: 7px; }
-  .name-row { display: flex; align-items: center; gap: 5px; }
-  .dot  { width: 8px; height: 8px; border-radius: 50%; flex-shrink: 0; }
-  .name { font-size: 13px; font-weight: bold; color: #e0f0ff; letter-spacing: 0.04em; }
-  .type { font-size: 9px; color: #4a7a9a; letter-spacing: 0.08em; }
+  .header { display: flex; justify-content: space-between; align-items: flex-start; margin-bottom: 8px; }
+  .name-row { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
+  .dot  { width: 9px; height: 9px; border-radius: 50%; flex-shrink: 0; }
+  .name { font-size: 16px; font-weight: bold; color: #e0f0ff; letter-spacing: 0.04em; }
+  .type-badge {
+    font-size: 10px; font-weight: bold; letter-spacing: 0.06em;
+    border: 1px solid; border-radius: 3px; padding: 1px 6px;
+  }
   .connected-badge {
-    font-size: 8px; background: #004433; color: #00ff88;
-    border: 1px solid #00ff8844; border-radius: 3px; padding: 1px 4px;
+    font-size: 10px; background: #004433; color: #00ff88;
+    border: 1px solid #00ff8844; border-radius: 3px; padding: 1px 5px;
     letter-spacing: 0.05em;
   }
-  .status { font-size: 9px; letter-spacing: 0.06em; font-weight: bold; }
+  .status { font-size: 11px; letter-spacing: 0.05em; font-weight: bold; white-space: nowrap; }
 
-  .metrics { display: flex; flex-direction: column; gap: 2px; margin-bottom: 6px; }
-  .metric  { display: flex; gap: 8px; font-size: 10px; }
-  .mkey    { color: #4a7a9a; width: 28px; flex-shrink: 0; }
+  .metrics { display: flex; flex-direction: column; gap: 3px; margin-bottom: 8px; }
+  .metric  { display: flex; gap: 10px; font-size: 12px; }
+  .mkey    { color: #4a7a9a; width: 32px; flex-shrink: 0; }
   .mval    { color: #c8d8e8; font-family: monospace; }
 
   .task {
-    font-size: 10px;
+    font-size: 12px;
     color: #8ab0c0;
-    padding: 5px 7px;
+    padding: 6px 8px;
     background: #0a1820;
     border-radius: 3px;
     border-left: 2px solid var(--agent-color);
-    margin-bottom: 7px;
+    margin-bottom: 8px;
     line-height: 1.4;
   }
 
   .cot {
     background: #06101a;
     border-radius: 4px;
-    padding: 7px 8px;
-    margin-bottom: 7px;
+    padding: 8px 10px;
+    margin-bottom: 8px;
   }
-  .cot-title { font-size: 8px; color: #3a6a8a; letter-spacing: 0.1em; margin-bottom: 5px; }
+  .cot-title { font-size: 10px; color: #3a6a8a; letter-spacing: 0.1em; margin-bottom: 5px; }
   .cot-text  {
-    font-size: 10px; color: #8ab8d0; font-family: monospace;
-    white-space: pre-wrap; line-height: 1.5; max-height: 80px; overflow: hidden;
+    font-size: 12px; color: #8ab8d0; font-family: monospace;
+    white-space: pre-wrap; line-height: 1.5; max-height: 90px; overflow: hidden;
   }
 
-  .controls { display: flex; gap: 5px; }
+  .controls { display: flex; gap: 6px; }
   .ctrl-btn {
-    font-size: 9px; font-family: monospace; padding: 3px 8px; border-radius: 3px;
+    font-size: 11px; font-family: monospace; padding: 4px 10px; border-radius: 3px;
     border: 1px solid; cursor: pointer; letter-spacing: 0.04em; transition: opacity 0.15s;
     text-transform: uppercase;
   }

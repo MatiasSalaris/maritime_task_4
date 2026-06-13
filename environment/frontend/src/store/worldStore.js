@@ -9,6 +9,8 @@ export const worldState = writable({
   messages_in_flight: [],
   message_log: [],
   mission: null,
+  doctrine: null,
+  aor: null,
 })
 
 export const selectedAgentId = writable(null)

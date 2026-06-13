@@ -36,3 +36,5 @@ class WorldState(BaseModel):
     messages_in_flight: list[dict] = []
     message_log: list[dict] = []
     mission: Optional[str] = None
+    doctrine: Optional[str] = None   # NATO phase code: PHASE0..PHASE3 or MSO
+    aor: Optional[dict] = None       # GeoJSON Polygon for operating area
