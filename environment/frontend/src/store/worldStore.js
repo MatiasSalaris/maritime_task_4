@@ -16,6 +16,7 @@ export const worldState = writable({
 export const selectedAgentId = writable(null)
 export const mapOverlay = writable('tactical')
 export const wsStatus = writable('disconnected') // 'connected' | 'disconnected' | 'reconnecting'
+export const godView = writable(false)
 
 export const selectedAgent = derived(
   [worldState, selectedAgentId],

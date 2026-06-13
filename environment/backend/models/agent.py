@@ -33,6 +33,8 @@ class AgentState(BaseModel):
     planned_path: list[Position] = []
     connected: bool = False     # whether an LLM agent is connected via WS
     cot_text: str = ""          # latest chain-of-thought chunk
+    altitude_m: float = 0.0        # 0 for USV, ~1000 for UAV
+    sensor_range_km: float = 12.0  # set per type in sim_provider
 
 
 class Action(BaseModel):

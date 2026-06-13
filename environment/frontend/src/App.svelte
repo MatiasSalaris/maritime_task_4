@@ -1,11 +1,12 @@
 <script>
   import { onMount, onDestroy } from 'svelte'
-  import { worldState, mapOverlay } from './store/worldStore.js'
+  import { worldState, mapOverlay, godView } from './store/worldStore.js'
   import { createClient }         from './ws/WorldStateClient.js'
   import { MapManager }           from './map/MapManager.js'
   import { AgentLayer }           from './map/AgentLayer.js'
   import { PathLayer }            from './map/PathLayer.js'
   import { ContactLayer }         from './map/ContactLayer.js'
+  import { SensorLayer }          from './map/SensorLayer.js'
   import { AnimationCanvas }      from './map/AnimationCanvas.js'
   import { MilitaryGrid }         from './map/MilitaryGrid.js'
   import { AreaSelector }         from './map/AreaSelector.js'
@@ -17,9 +18,11 @@
   import { selectedAgentId }      from './store/worldStore.js'
 
   const AGENT_IDS = ['agent_0', 'agent_1', 'agent_2']
+  const AGENT_TYPES = { agent_0: 'USV', agent_1: 'USV', agent_2: 'UAV' }
 
   let mapContainer
   let mapMgr, agentLayer, pathLayer, contactLayer, animCanvas
+  let sensorLayer
   let militaryGrid, areaSelector, areaLayer
   let wsClient
   let ready = false
@@ -30,11 +33,24 @@
   let hasArea     = false
   let pendingGeo  = null    // GeoJSON Polygon geometry waiting to be sent
 
-  // Reactive layer updates
+  // Reactive layer updates (data rate ~10 Hz): feed targets + cache geometry.
+  // The actual drawing of the trace / sensor rings happens at 60 fps in the
+  // AgentLayer rAF callback (see onMount), interpolated for smooth motion.
+  // Single path: reruns on every world tick AND immediately when god view is
+  // toggled (both $worldState and $godView are referenced here).
   $: if (ready && $worldState.agents) {
-    agentLayer?.update($worldState.agents)
-    pathLayer?.update($worldState.agents)
-    contactLayer?.update($worldState.contacts ?? [])
+    agentLayer?.update($worldState.agents)   // sets interpolation targets
+    pathLayer?.update($worldState.agents)    // caches history / planned coords
+    contactLayer?.update($worldState.contacts ?? [], $worldState.agents ?? [], $godView, $worldState.time)
+  }
+
+  // Detect a world reset (path history collapses to empty) → wipe track memory
+  // so previously-detected contacts don't linger as ghosts after a fresh start.
+  let _prevHistLen = 0
+  $: if (ready) {
+    const histLen = ($worldState.agents ?? []).reduce((n, a) => n + (a.path_history?.length ?? 0), 0)
+    if (_prevHistLen > 4 && histLen === 0) contactLayer?.reset()
+    _prevHistLen = histLen
   }
 
   // Feed p2p messages to animation canvas
@@ -104,22 +120,40 @@
   }
 
   onMount(async () => {
+    // Start clean: wipe any preserved backend state from a previous session
+    // so a page refresh always begins from a blank world.
+    try { await fetch('/api/reset', { method: 'POST' }) } catch (e) { /* non-fatal */ }
+
     mapMgr = new MapManager(mapContainer)
     await mapMgr.init('tactical')
 
     const map = mapMgr.map
 
-    // Base map layers
-    pathLayer    = new PathLayer(map, AGENT_IDS)
+    // Base map layers. PathLayer draws the fading sensor swath + track;
+    // the swath width is driven by agent type (UAV wide camera / USV radar).
+    pathLayer    = new PathLayer(map, AGENT_IDS, AGENT_TYPES)
     contactLayer = new ContactLayer(map)
     areaLayer    = new OperatingAreaLayer(map)
     pathLayer.init()
     contactLayer.init()
     areaLayer.init()
 
+    // Live sensor footprint rings (computed client-side from agent positions)
+    sensorLayer = new SensorLayer(map, AGENT_IDS)
+    sensorLayer.init()
+
     agentLayer    = new AgentLayer(mapMgr, id => selectedAgentId.set(id))
     animCanvas    = new AnimationCanvas(mapContainer, agentLayer)
+    animCanvas.setMap(map)
+    contactLayer.setAnimCanvas(animCanvas)
     militaryGrid  = new MilitaryGrid(mapContainer, map)
+
+    // Smooth 60 fps rendering: the trace and sensor rings are drawn from the
+    // AgentLayer's interpolated positions, so they stay glued to the icon.
+    agentLayer.onFrame(disp => {
+      pathLayer?.renderFrame(disp)
+      sensorLayer?.renderFrame(disp)
+    })
 
     // Area selector — emits geometry when drawing completes
     areaSelector = new AreaSelector(map, mapContainer, geo => {
@@ -134,6 +168,7 @@
     wsClient?.destroy()
     agentLayer?.teardown()
     pathLayer?.teardown()
+    sensorLayer?.teardown()
     contactLayer?.teardown()
     areaLayer?.teardown()
     animCanvas?.destroy()
@@ -153,7 +188,7 @@
     <OverlayPicker onSwitch={switchOverlay} />
   </div>
 
-  <!-- Map tools — top-left (AOR drawing + MGRS grid toggle) -->
+  <!-- Map tools — top-left (AOR drawing + MGRS grid toggle + GOD VIEW) -->
   <div class="tools-widget">
     <MapTools
       activeMode={drawMode}

@@ -4,7 +4,7 @@ import time
 import uuid
 from models.agent import AgentState, AgentStatus, AgentType, Observation, Position, Action
 from models.messages import P2PMessage
-from models.world import Contact, Geofence, POI, WorldState
+from models.world import Contact, ContactStatus, Geofence, POI, WorldState
 from providers.base import AbstractPlatformProvider
 from providers.simulation.physics import move, distance_km
 from providers.simulation.synthetic_ais import initial_contacts
@@ -15,6 +15,11 @@ _SENSOR_RANGE_KM = 12.0
 _MAX_HISTORY = 400   # path history points kept per agent
 _MIN_HIST_DIST_M = 8 # minimum movement to record a new history point
 _AGENT_COLORS = ["#00d4ff", "#00ff88", "#ff8800"]
+
+_UAV_ALTITUDE_M         = 1000.0
+_UAV_HALF_FOV_DEG       = 60.0   # camera half-FOV
+_UAV_SENSOR_RADIUS_KM   = _UAV_ALTITUDE_M * math.tan(math.radians(_UAV_HALF_FOV_DEG)) / 1000.0  # ≈1.73 km
+_USV_SENSOR_RANGE_KM    = 4.0    # radar range — sized for demo area (~25×20 km)
 
 
 class SimulatedPlatformProvider(AbstractPlatformProvider):
@@ -28,6 +33,8 @@ class SimulatedPlatformProvider(AbstractPlatformProvider):
         self.doctrine: str | None = None
         self.aor: dict | None = None
         self.world_time: float = time.time()
+        self._nato_counter: int = 0
+        self._pending_events: list[dict] = []
 
     # ── Initialisation ────────────────────────────────────────────────────────
 
@@ -37,16 +44,19 @@ class SimulatedPlatformProvider(AbstractPlatformProvider):
                 id="agent_0", name="Alpha", type=AgentType.USV,
                 position=Position(lat=37.505, lon=15.07),
                 heading=45, speed_kn=8.0,
+                sensor_range_km=_USV_SENSOR_RANGE_KM, altitude_m=0.0,
             ),
             AgentState(
                 id="agent_1", name="Bravo", type=AgentType.USV,
                 position=Position(lat=37.490, lon=15.16),
                 heading=180, speed_kn=8.0,
+                sensor_range_km=_USV_SENSOR_RANGE_KM, altitude_m=0.0,
             ),
             AgentState(
                 id="agent_2", name="Charlie", type=AgentType.UAV,
                 position=Position(lat=37.545, lon=15.17),
                 heading=270, speed_kn=8.0,
+                sensor_range_km=_UAV_SENSOR_RADIUS_KM, altitude_m=_UAV_ALTITUDE_M,
             ),
         ]
 
@@ -77,6 +87,7 @@ class SimulatedPlatformProvider(AbstractPlatformProvider):
         self.world_time += dt
         self._move_agents(dt)
         self._move_contacts(dt)
+        self._run_sensor_detection(dt)
 
     async def get_observation(
         self, agent_id: str, inbox: list[P2PMessage]
@@ -88,7 +99,7 @@ class SimulatedPlatformProvider(AbstractPlatformProvider):
         visible = [
             c.model_dump()
             for c in self.contacts
-            if distance_km(agent.position, c.position) <= _SENSOR_RANGE_KM
+            if distance_km(agent.position, c.position) <= agent.sensor_range_km
         ]
         return Observation(
             agent_id=agent_id,
@@ -124,6 +135,13 @@ class SimulatedPlatformProvider(AbstractPlatformProvider):
             agent.position = parsed.warp_to
 
     async def get_world_state(self) -> WorldState:
+        sensor_footprints = {
+            agent.id: self._sensor_footprint_polygon(agent)
+            for agent in self.agents
+        }
+        detection_events = list(self._pending_events)
+        self._pending_events.clear()
+
         return WorldState(
             time=self.world_time,
             agents=list(self.agents),
@@ -133,6 +151,8 @@ class SimulatedPlatformProvider(AbstractPlatformProvider):
             mission=self.mission,
             doctrine=self.doctrine,
             aor=self.aor,
+            sensor_footprints=sensor_footprints,
+            detection_events=detection_events,
         )
 
     async def set_doctrine(self, code: str) -> None:
@@ -157,7 +177,18 @@ class SimulatedPlatformProvider(AbstractPlatformProvider):
             agent.planned_path = []
             agent.cot_text = ''
             agent.current_task = None
+            agent.speed_kn = 0.0   # stop physics so DemoRunner's warp_to is the only driver
         self.mission = None
+        self._detection_state: dict[str, str] = {}
+        self._pending_events.clear()
+        self._nato_counter = 0
+        for c in self.contacts:
+            c.status = ContactStatus.UNKNOWN
+            c.nato_id = None
+            c.first_seen = None
+            c.last_seen = None
+            c.last_known_position = None
+            c.detecting_agents = []
 
     async def update_agent_cot(self, agent_id: str, chunk: str) -> None:
         agent = self._agent(agent_id)
@@ -171,6 +202,70 @@ class SimulatedPlatformProvider(AbstractPlatformProvider):
 
     def _agent(self, agent_id: str) -> AgentState | None:
         return next((a for a in self.agents if a.id == agent_id), None)
+
+    def _sensor_footprint_polygon(self, agent: AgentState) -> list[list[float]]:
+        """Compute a 32-point circle polygon around agent position with sensor_range_km radius.
+        Returns a closed ring of [lon, lat] pairs (first == last)."""
+        lat = agent.position.lat
+        lon = agent.position.lon
+        r = agent.sensor_range_km
+
+        lat_rad = math.radians(lat)
+        dlat = r / 111.32
+        dlon = r / (111.32 * math.cos(lat_rad)) if math.cos(lat_rad) != 0 else r / 111.32
+
+        num_points = 32
+        ring = []
+        for i in range(num_points):
+            angle = math.radians(i * 360.0 / num_points)
+            pt_lon = lon + dlon * math.cos(angle)
+            pt_lat = lat + dlat * math.sin(angle)
+            ring.append([pt_lon, pt_lat])
+        # Close the ring
+        ring.append(ring[0])
+        return ring
+
+    def _run_sensor_detection(self, dt: float) -> None:
+        """Check each contact against all agent sensor ranges and update detection state."""
+        for contact in self.contacts:
+            detecting_agents = []
+            for agent in self.agents:
+                if distance_km(agent.position, contact.position) <= agent.sensor_range_km:
+                    detecting_agents.append(agent.id)
+
+            prev_status = contact.status
+
+            if detecting_agents:
+                # First detection: assign NATO track ID
+                if prev_status == ContactStatus.UNKNOWN:
+                    self._nato_counter += 1
+                    n = self._nato_counter
+                    if contact.flagged:
+                        nato_id = f"TGT-{n:03d}"
+                    elif contact.mmsi:
+                        nato_id = f"AIS-{n:03d}"
+                    else:
+                        nato_id = f"UNK-{n:03d}"
+                    contact.nato_id = nato_id
+                    contact.first_seen = self.world_time
+                    self._pending_events.append({
+                        "contact_id": contact.id,
+                        "nato_id": nato_id,
+                        "position": {"lon": contact.position.lon, "lat": contact.position.lat},
+                        "time": self.world_time,
+                    })
+
+                contact.detecting_agents = detecting_agents
+                contact.status = ContactStatus.ACTIVE
+                contact.last_seen = self.world_time
+                contact.last_known_position = Position(lat=contact.position.lat, lon=contact.position.lon)
+
+            else:
+                contact.detecting_agents = []
+                if prev_status == ContactStatus.ACTIVE:
+                    contact.status = ContactStatus.GHOST
+                elif prev_status == ContactStatus.UNKNOWN:
+                    contact.status = ContactStatus.UNKNOWN  # no change
 
     def _move_agents(self, dt: float) -> None:
         b = _BOUNDS

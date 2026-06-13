@@ -1,4 +1,6 @@
 <script>
+  import { godView } from '../store/worldStore.js'
+
   export let onModeChange  = (_mode) => {}   // 'rect' | 'circle' | 'poly' | null
   export let onClearArea   = () => {}
   export let onGridToggle  = () => {}
@@ -19,6 +21,10 @@
   async function transmitAOR() {
     // Signal to parent that AOR should be sent to backend
     onModeChange('__transmit__')
+  }
+
+  function toggleGodView() {
+    godView.update(v => !v)
   }
 </script>
 
@@ -47,6 +53,16 @@
     title="Toggle MGRS grid"
     on:click={onGridToggle}
   >⊞</button>
+
+  <div class="divider"></div>
+
+  <div class="group-label">VIEW</div>
+  <button
+    class="tool-btn god-btn"
+    class:god-active={$godView}
+    title="Toggle God View — reveals all undetected contacts"
+    on:click={toggleGodView}
+  >⊙</button>
 
   {#if activeMode && activeMode !== '__transmit__'}
     <div class="draw-hint">
@@ -105,6 +121,14 @@
   .tool-btn.active { background: #0d2a3a; border-color: #00d4ff; color: #00d4ff; }
   .tool-btn.clear  { border-color: #ff335544; color: #ff6677; font-size: 12px; }
   .tool-btn.clear:hover { background: #200a0a; }
+
+  .god-btn { font-size: 16px; }
+  .god-btn.god-active {
+    background: #001a2a;
+    border-color: #00aaff;
+    color: #00d4ff;
+    box-shadow: 0 0 8px rgba(0, 212, 255, 0.4);
+  }
 
   .draw-hint {
     position: absolute;
