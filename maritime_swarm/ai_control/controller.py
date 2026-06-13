@@ -1,7 +1,7 @@
 """Swarm controller: wire LLM brains to the world model and run them.
 
 Responsibilities:
-  1. Reset the world and set the mission (REST).
+  1. Reset the world and read any explicit mission (REST).
   2. Read the scenario (operating area + POIs) once (REST).
   3. Spawn one :class:`AgentBrain` per world-model agent and run them together.
 
@@ -28,12 +28,6 @@ from maritime_swarm.ai_control.world_client import WorldModelClient
 
 logger = logging.getLogger(__name__)
 
-DEFAULT_MISSION = (
-    "PATROL ORDER: Maintain persistent surveillance of the assigned operating area in the "
-    "Strait of Sicily. Detect, approach and identify any UNKNOWN or unflagged surface contacts. "
-    "Keep the three assets dispersed for maximum sensor coverage and shadow anything suspicious."
-)
-
 # Cruise speeds (knots) used by the tools when transiting. These are demo
 # parameters (the brief scores coordination, not flight dynamics) — fast enough
 # that an asset can actually run down a moving contact.
@@ -58,11 +52,11 @@ def _wait_for_backend(http_url: str, timeout_s: float = 120.0) -> None:
             time.sleep(2.0)
 
 
-def _prepare_world(http_url: str, mission_override: str | None) -> tuple[dict[str, Any], str]:
-    """Reset, set the mission, and return (initial world state, mission used).
+def _prepare_world(http_url: str, mission_override: str | None) -> tuple[dict[str, Any], str | None]:
+    """Reset the world and return (initial world state, optional mission).
 
     Mission precedence (so a mission typed in the frontend is respected):
-        explicit override  >  mission already set in the world  >  default.
+        explicit override  >  mission already set in the world  >  no mission.
     The current mission is read *before* the reset (which clears it).
     """
     _wait_for_backend(http_url)
@@ -70,10 +64,11 @@ def _prepare_world(http_url: str, mission_override: str | None) -> tuple[dict[st
     pre.raise_for_status()
     existing = (pre.json().get("mission") or "").strip()
 
-    mission = (mission_override or "").strip() or existing or DEFAULT_MISSION
+    mission = (mission_override or "").strip() or existing or None
 
     requests.post(f"{http_url}/api/reset", timeout=10).raise_for_status()
-    requests.post(f"{http_url}/api/mission", json={"text": mission}, timeout=10).raise_for_status()
+    if mission:
+        requests.post(f"{http_url}/api/mission", json={"text": mission}, timeout=10).raise_for_status()
 
     resp = requests.get(f"{http_url}/api/state", timeout=10)
     resp.raise_for_status()
@@ -93,7 +88,10 @@ async def run_swarm(
     """
     state, mission = await asyncio.to_thread(_prepare_world, http_url, mission)
     scene = Scene.from_world_state(state)
-    logger.info("Mission: %s", mission)
+    if mission:
+        logger.info("Mission: %s", mission)
+    else:
+        logger.info("No mission set — agents are idle until a mission is submitted.")
     registry = default_registry()
 
     agents = state.get("agents", [])

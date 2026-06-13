@@ -1,9 +1,9 @@
 #!/usr/bin/env bash
 #
 # Run the full maritime simulation from scratch:
-#   1. boot the world model + frontend (Docker)
+#   1. boot the world model + frontend + AI controller (Docker)
 #   2. wait for the world model to be healthy
-#   3. launch the AI control layer (real LLM if GROQ_API_KEY is set)
+#   3. follow AI logs
 #
 # Watch it at http://localhost:5173
 #
@@ -24,13 +24,7 @@ for _ in $(seq 1 60); do
   sleep 1
 done
 
-echo "▶ Installing AI control dependencies (host) ..."
-python3 -m pip install -q -r maritime_swarm/ai_control/requirements.txt
-
-if [ -z "${GROQ_API_KEY:-}${API_KEY:-}" ]; then
-  echo "⚠  No GROQ_API_KEY set — the AI layer will use the offline heuristic planner."
-  echo "   Export GROQ_API_KEY=... for real LLM decisions."
-fi
-
-echo "▶ Launching AI control (Ctrl+C to stop) ..."
-exec python3 -m maritime_swarm.ai_control
+echo "▶ Frontend: http://localhost:5173"
+echo "▶ Backend:  http://localhost:8000"
+echo "▶ Following AI logs (Ctrl+C stops log view; containers keep running) ..."
+docker compose -f "$COMPOSE" logs -f ai

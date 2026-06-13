@@ -13,28 +13,27 @@
     return $worldState.agents?.find(a => a.id === id)?.name ?? id
   }
 
-  // Per-agent comms audit: messages this asset sent or received (excluding the
-  // high-frequency status heartbeats). Only computed while the card is selected.
+  function shortText(value, max = 110) {
+    const text = (value ?? '').replace(/\s+/g, ' ').trim()
+    if (text.length <= max) return text
+    return text.slice(0, max - 1).trimEnd() + '…'
+  }
+
+  function usefulThought(cot) {
+    return (cot ?? '')
+      .split('\n')
+      .map(s => s.trim())
+      .filter(Boolean)
+      .filter(s => !s.toLowerCase().startsWith('new mission'))
+      .at(-1)
+  }
+
   $: comms = selected
     ? ($worldState.message_log ?? [])
         .filter(m => m.msg_type !== 'status' &&
                      (m.from_agent === agent.id || m.to_agent === agent.id || m.to_agent === 'all'))
-        .slice(-8)
+        .slice(-4)
     : []
-
-  // Keep the chain-of-thought pinned to the latest entry unless the user has
-  // scrolled up to read earlier reasoning (standard "stick to bottom" behaviour).
-  function stickyScroll(node) {
-    let stick = true
-    const nearBottom = () => node.scrollHeight - node.scrollTop - node.clientHeight < 28
-    const onScroll = () => { stick = nearBottom() }
-    const pin = () => { if (stick) node.scrollTop = node.scrollHeight }
-    node.addEventListener('scroll', onScroll)
-    const obs = new MutationObserver(pin)
-    obs.observe(node, { childList: true, subtree: true, characterData: true })
-    pin()
-    return { destroy() { node.removeEventListener('scroll', onScroll); obs.disconnect() } }
-  }
 
   const STATUS_LABEL = {
     operational: '● OPERATIONAL',
@@ -55,9 +54,10 @@
   $: color      = agentColor(agent.id)
   $: statusText = STATUS_LABEL[agent.status]  ?? agent.status
   $: statusClr  = STATUS_COLOR[agent.status]  ?? '#ffffff'
-  $: thoughts   = (agent.cot_text ?? '').split('\n').map(s => s.trim()).filter(Boolean)
   $: tag        = actionTag(agent.current_task)
   $: typeMeta   = TYPE_META[(agent.type ?? '').toUpperCase()] ?? TYPE_META.USV
+  $: taskText   = shortText(agent.current_task ?? 'Awaiting orders', 86)
+  $: noteText   = shortText(usefulThought(agent.cot_text), 130)
 
   function fmt(n) { return n?.toFixed(1) ?? '—' }
 
@@ -92,10 +92,6 @@
 
   <div class="metrics">
     <div class="metric">
-      <span class="mkey">POS</span>
-      <span class="mval">{fmt(agent.position?.lat)}°N {fmt(agent.position?.lon)}°E</span>
-    </div>
-    <div class="metric">
       <span class="mkey">HDG</span>
       <span class="mval">{fmt(agent.heading)}°</span>
     </div>
@@ -107,23 +103,19 @@
 
   <div class="action-row">
     <span class="action-tag" style="--t:{tag.color}">{tag.label}</span>
-    <span class="action-task">{agent.current_task ?? 'awaiting orders'}</span>
+    <span class="action-task">{taskText}</span>
   </div>
 
-  {#if thoughts.length}
-    <div class="cot">
-      <div class="cot-title">CHAIN OF THOUGHT <span class="cot-count">({thoughts.length})</span></div>
-      <div class="cot-text" use:stickyScroll>
-        {#each thoughts as line, i}
-          <div class="cot-line" class:latest={i === thoughts.length - 1}>{line}</div>
-        {/each}
-      </div>
+  {#if selected && noteText}
+    <div class="note">
+      <div class="detail-title">Latest reasoning</div>
+      <div class="note-text">{noteText}</div>
     </div>
   {/if}
 
   {#if selected}
     <div class="comms">
-      <div class="cot-title">COMMS AUDIT {#if comms.length}<span class="cot-count">({comms.length})</span>{/if}</div>
+      <div class="detail-title">Recent messages</div>
       {#if comms.length}
         <div class="comms-list">
           {#each comms as m (m.id)}
@@ -132,7 +124,7 @@
               <span class="cicon" style="color:{MSG_COLOR[m.msg_type] ?? '#888'}">{MSG_ICON[m.msg_type] ?? '?'}</span>
               <span class="cpeer">{m.from_agent === agent.id ? agentName(m.to_agent) : agentName(m.from_agent)}</span>
               <span class="ctype" style="color:{MSG_COLOR[m.msg_type] ?? '#888'}">{m.msg_type}</span>
-              {#if m.reasoning}<div class="ctext">{m.reasoning}</div>{/if}
+              {#if m.reasoning}<div class="ctext">{shortText(m.reasoning, 120)}</div>{/if}
             </div>
           {/each}
         </div>
@@ -142,25 +134,32 @@
     </div>
   {/if}
 
-  <div class="controls">
-    {#if agent.status !== 'silent'}
-      <button class="ctrl-btn danger" title="Simulate comms loss"
-              on:click|stopPropagation={() => forceStatus('silent')}>
-        ✂ Disconnect
-      </button>
-    {:else}
-      <button class="ctrl-btn ok"
-              on:click|stopPropagation={() => forceStatus('operational')}>
-        ↩ Reconnect
-      </button>
-    {/if}
-  </div>
+  {#if selected}
+    <div class="details">
+      <span>{fmt(agent.position?.lat)}°N</span>
+      <span>{fmt(agent.position?.lon)}°E</span>
+    </div>
+
+    <div class="controls">
+      {#if agent.status !== 'silent'}
+        <button class="ctrl-btn danger" title="Simulate comms loss"
+                on:click|stopPropagation={() => forceStatus('silent')}>
+          Disconnect
+        </button>
+      {:else}
+        <button class="ctrl-btn ok"
+                on:click|stopPropagation={() => forceStatus('operational')}>
+          Reconnect
+        </button>
+      {/if}
+    </div>
+  {/if}
 </div>
 
 <style>
   .card {
     border-left: 3px solid var(--agent-color);
-    padding: 12px 14px;
+    padding: 10px 14px;
     border-bottom: 1px solid #111e2a;
     cursor: pointer;
     transition: background 0.15s;
@@ -168,10 +167,10 @@
   .card:hover    { background: #0d1a26; }
   .card.selected { background: #0d2030; }
 
-  .header { display: flex; justify-content: space-between; align-items: flex-start; margin-bottom: 8px; }
+  .header { display: flex; justify-content: space-between; align-items: flex-start; margin-bottom: 7px; }
   .name-row { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
   .dot  { width: 9px; height: 9px; border-radius: 50%; flex-shrink: 0; }
-  .name { font-size: 16px; font-weight: bold; color: #e0f0ff; letter-spacing: 0.04em; }
+  .name { font-size: 15px; font-weight: bold; color: #e0f0ff; letter-spacing: 0.02em; }
   .type-badge {
     font-size: 10px; font-weight: bold; letter-spacing: 0.06em;
     border: 1px solid; border-radius: 3px; padding: 1px 6px;
@@ -183,7 +182,7 @@
   }
   .status { font-size: 11px; letter-spacing: 0.05em; font-weight: bold; white-space: nowrap; }
 
-  .metrics { display: flex; flex-direction: column; gap: 3px; margin-bottom: 8px; }
+  .metrics { display: flex; gap: 16px; margin-bottom: 8px; }
   .metric  { display: flex; gap: 10px; font-size: 12px; }
   .mkey    { color: #4a7a9a; width: 32px; flex-shrink: 0; }
   .mval    { color: #c8d8e8; font-family: monospace; }
@@ -204,33 +203,20 @@
   }
   .action-task {
     font-size: 12px; color: #b6d4e4; font-family: monospace;
-    line-height: 1.35; overflow: hidden; text-overflow: ellipsis;
+    line-height: 1.35;
   }
 
-  .cot {
+  .note {
     background: #06101a;
     border-radius: 4px;
     padding: 8px 10px;
     margin-bottom: 8px;
   }
-  .cot-title { font-size: 10px; color: #3a6a8a; letter-spacing: 0.1em; margin-bottom: 5px; }
-  .cot-count { color: #2a4a5a; }
-  .cot-text  {
-    max-height: 168px; overflow-y: auto;
-    display: flex; flex-direction: column; gap: 4px;
-    scrollbar-width: thin; scrollbar-color: #1a3a5a transparent;
-  }
-  .cot-line {
-    font-size: 12px; color: #5f8296; font-family: monospace;
-    white-space: pre-wrap; line-height: 1.45;
-    padding-left: 8px; border-left: 2px solid #15303f;
-  }
-  .cot-line.latest {
-    color: #b8dcec; border-left-color: var(--agent-color);
-  }
+  .detail-title { font-size: 10px; color: #3a6a8a; letter-spacing: 0.08em; margin-bottom: 5px; text-transform: uppercase; }
+  .note-text { font-size: 12px; color: #b8dcec; font-family: monospace; line-height: 1.45; }
 
   .comms { background: #06101a; border-radius: 4px; padding: 8px 10px; margin-bottom: 8px; }
-  .comms-list { display: flex; flex-direction: column; gap: 5px; max-height: 150px; overflow-y: auto;
+  .comms-list { display: flex; flex-direction: column; gap: 5px; max-height: 118px; overflow-y: auto;
                 scrollbar-width: thin; scrollbar-color: #1a3a5a transparent; }
   .cmsg { font-family: monospace; font-size: 11px; line-height: 1.35; }
   .cdir  { color: #4a7a9a; }
@@ -240,6 +226,15 @@
   .ctext { color: #9fc0d0; padding: 1px 0 2px 10px; border-left: 2px solid #15303f; margin-top: 2px;
            white-space: pre-wrap; }
   .comms-empty { font-size: 11px; color: #3a5a7a; }
+
+  .details {
+    display: flex;
+    gap: 12px;
+    color: #6d92a6;
+    font-family: monospace;
+    font-size: 11px;
+    margin-bottom: 8px;
+  }
 
   .controls { display: flex; gap: 6px; }
   .ctrl-btn {

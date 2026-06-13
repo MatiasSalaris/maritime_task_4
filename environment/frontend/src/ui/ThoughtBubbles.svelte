@@ -8,9 +8,22 @@
   let bubbles = []
   let raf
 
-  // How many recent thoughts to show in the floating bubble (the side-panel
-  // AgentCard shows the full, scrollable chain).
-  const MAX_LINES = 4
+  const MAX_TEXT = 76
+
+  function shortText(value, max = MAX_TEXT) {
+    const text = (value ?? '').replace(/\s+/g, ' ').trim()
+    if (text.length <= max) return text
+    return text.slice(0, max - 1).trimEnd() + '…'
+  }
+
+  function usefulThought(cot) {
+    return (cot ?? '')
+      .split('\n')
+      .map(s => s.trim())
+      .filter(Boolean)
+      .filter(s => !s.toLowerCase().startsWith('new mission'))
+      .at(-1)
+  }
 
   function update() {
     raf = requestAnimationFrame(update)
@@ -20,13 +33,16 @@
       .map(a => {
         const pos = agentLayerRef.getScreenPos(a.id)
         if (!pos) return null
-        const thoughts = (a.cot_text ?? '')
-          .split('\n')
-          .map(s => s.trim())
-          .filter(Boolean)
-          .slice(-MAX_LINES)
-        if (!thoughts.length && !a.current_task) return null
-        return { agent: a, x: pos.x, y: pos.y, thoughts, tag: actionTag(a.current_task) }
+        const thought = usefulThought(a.cot_text)
+        if (!thought && !a.current_task) return null
+        return {
+          agent: a,
+          x: pos.x,
+          y: pos.y,
+          task: shortText(a.current_task || 'Awaiting orders', 54),
+          thought: shortText(thought, 82),
+          tag: actionTag(a.current_task),
+        }
       })
       .filter(Boolean)
   }
@@ -35,7 +51,7 @@
   onDestroy(() => cancelAnimationFrame(raf))
 </script>
 
-{#each bubbles as { agent, x, y, thoughts, tag } (agent.id)}
+{#each bubbles as { agent, x, y, task, thought, tag } (agent.id)}
   {@const color = agentColor(agent.id)}
   <div class="bubble" style="left:{x}px; top:{y - 26}px; --clr:{color};">
     <div class="bhead">
@@ -43,16 +59,10 @@
       <span class="btag" style="--t:{tag.color}">{tag.label}</span>
     </div>
 
-    {#if agent.current_task}
-      <div class="btask">{agent.current_task}</div>
-    {/if}
+    <div class="btask">{task}</div>
 
-    {#if thoughts.length}
-      <div class="cot">
-        {#each thoughts as line, i}
-          <div class="cot-line" class:latest={i === thoughts.length - 1}>{line}</div>
-        {/each}
-      </div>
+    {#if thought}
+      <div class="note">{thought}</div>
     {/if}
 
     <div class="tail"></div>
@@ -63,11 +73,10 @@
   .bubble {
     position: absolute;
     transform: translate(-50%, -100%);
-    max-width: 300px;
-    min-width: 184px;
+    width: 220px;
     background: rgba(6, 12, 24, 0.94);
     border: 1px solid var(--clr, #00d4ff);
-    border-radius: 8px;
+    border-radius: 6px;
     padding: 7px 10px 9px;
     pointer-events: none;
     z-index: 30;
@@ -80,7 +89,7 @@
     align-items: center;
     justify-content: space-between;
     gap: 8px;
-    margin-bottom: 5px;
+    margin-bottom: 6px;
   }
   .bname {
     font-family: monospace;
@@ -112,22 +121,13 @@
     padding-left: 6px;
   }
 
-  .cot {
+  .note {
     border-top: 1px solid #16283a;
-    padding-top: 5px;
-    display: flex;
-    flex-direction: column;
-    gap: 3px;
-  }
-  .cot-line {
+    padding-top: 6px;
     font-family: monospace;
     font-size: 11px;
-    line-height: 1.4;
-    color: #5f7e90;          /* older thoughts: dim */
-    white-space: pre-wrap;
-  }
-  .cot-line.latest {
-    color: #b8dcec;          /* current thought: bright */
+    line-height: 1.35;
+    color: #8fb5c8;
   }
 
   .tail {

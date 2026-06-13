@@ -39,10 +39,16 @@
     const d = new Date(unix * 1000)
     return d.toTimeString().slice(0, 8)
   }
+
+  function shortText(value, max = 120) {
+    const text = (value ?? '').replace(/\s+/g, ' ').trim()
+    if (text.length <= max) return text
+    return text.slice(0, max - 1).trimEnd() + '…'
+  }
 </script>
 
 <div class="log-section">
-  <div class="title">MESSAGE LOG</div>
+  <div class="title">MESSAGES</div>
   <div class="log" bind:this={el}>
     {#each visibleLog as msg (msg.id)}
       <div class="entry">
@@ -56,7 +62,7 @@
         <span class="type" style="color:{TYPE_COLOR[msg.msg_type] ?? '#888'}">{msg.msg_type}</span>
       </div>
       {#if msg.reasoning}
-        <div class="reasoning">{msg.reasoning}</div>
+        <div class="reasoning">{shortText(msg.reasoning)}</div>
       {/if}
     {/each}
     {#if !visibleLog.length}

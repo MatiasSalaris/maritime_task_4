@@ -11,7 +11,7 @@
 <aside class="panel">
   <!-- Header -->
   <div class="header">
-    <div class="brand">SWARM&nbsp;OF&nbsp;THREE</div>
+    <div class="brand">MARITIME SWARM</div>
     <div class="ws-status">
       <span class="ws-dot" style="background:{STATUS_DOT[$wsStatus] ?? '#888'}"></span>
       <span class="ws-label">{$wsStatus.toUpperCase()}</span>
@@ -26,7 +26,7 @@
 
   <!-- Agent cards -->
   <div class="agents-section">
-    <div class="section-title">ASSETS</div>
+    <div class="section-title">VEHICLES</div>
     {#each ($worldState.agents ?? []) as agent (agent.id)}
       <AgentCard
         {agent}
@@ -44,7 +44,7 @@
 
 <style>
   .panel {
-    width: 420px;
+    width: 370px;
     flex-shrink: 0;
     background: #060c18;
     border-right: 1px solid #1a2a3a;
