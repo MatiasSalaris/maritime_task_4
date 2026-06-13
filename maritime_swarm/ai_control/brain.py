@@ -53,6 +53,7 @@ class AgentBrain:
         self._thinking = False
         self._last_think = 0.0
         self._seen_contacts: set[str] = set()
+        self._mission_changed = False
 
     async def run(self) -> None:
         await self.client.connect()
@@ -72,6 +73,15 @@ class AgentBrain:
             await self.client.close()
 
     async def _on_observation(self, obs: Observation) -> None:
+        # Live mission updates: the operator can change the mission in the
+        # frontend at any time. Adopt the new text and force an immediate replan.
+        incoming = (obs.mission or "").strip()
+        if incoming and incoming != self.mission:
+            self.mission = incoming
+            self._mission_changed = True
+            logger.info("[%s] new mission: %s", self.ctx.agent_id, incoming)
+            asyncio.create_task(self.client.send_cot(f"New mission received — re-planning.\n{incoming}"))
+
         # Track newly-appeared contacts; a fresh suspicious contact justifies
         # interrupting the current plan to reconsider.
         new_ids = {c.id for c in obs.contacts} - self._seen_contacts
@@ -80,12 +90,16 @@ class AgentBrain:
         already_investigating = (
             self.active_tool is not None and self.active_tool.name == "investigate_contact"
         )
-        interrupt = new_suspicious and not already_investigating
+        # A mission change forces a replan immediately, bypassing the rate limit.
+        force = self._mission_changed
+        interrupt = force or (new_suspicious and not already_investigating)
 
         # Decide whether to (re)plan.
         idle = self.active_tool is None
         now = time.monotonic()
-        if (idle or interrupt) and not self._thinking and (now - self._last_think) >= self.min_think_interval:
+        rate_ok = force or (now - self._last_think) >= self.min_think_interval
+        if (idle or interrupt) and not self._thinking and rate_ok:
+            self._mission_changed = False
             self._thinking = True
             asyncio.create_task(self._think(obs))
 

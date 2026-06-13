@@ -30,5 +30,28 @@ services:
       - backend
     restart: unless-stopped
 
+  # AI control layer (the "brains"). Separate process/container that connects to
+  # the world model over its WebSocket/REST contract and drives the agents with
+  # real LLM-selected tools. The maritime_swarm package lives at the repo root,
+  # so it is mounted in from one level above this compose file.
+  ai:
+    image: python:3.11-slim
+    working_dir: /app
+    volumes:
+      - ../maritime_swarm:/app/maritime_swarm:ro
+    environment:
+      - WORLD_HTTP_URL=http://backend:8000
+      - WORLD_WS_URL=ws://backend:8000
+      - PYTHONUNBUFFERED=1
+    # Load GROQ_API_KEY (and optional GROQ_MODEL / MISSION) from the repo-root
+    # .env if present; without a key the layer runs its offline heuristic planner.
+    env_file:
+      - path: ../.env
+        required: false
+    command: sh -c "pip install --no-cache-dir requests websockets && python -m maritime_swarm.ai_control"
+    depends_on:
+      - backend
+    restart: unless-stopped
+
 volumes:
   frontend_node_modules:

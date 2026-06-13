@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import time
 from typing import Any
 
 import requests
@@ -40,6 +41,20 @@ def _cruise_for(agent_type: str) -> float:
     return _CRUISE_BY_TYPE.get(agent_type.upper(), 25.0)
 
 
+def _wait_for_backend(http_url: str, timeout_s: float = 120.0) -> None:
+    """Block until the world model answers /health (it may still be booting)."""
+    deadline = time.monotonic() + timeout_s
+    while True:
+        try:
+            requests.get(f"{http_url}/health", timeout=5).raise_for_status()
+            return
+        except Exception as exc:  # not up yet
+            if time.monotonic() >= deadline:
+                raise RuntimeError(f"world model at {http_url} did not become healthy") from exc
+            logger.info("Waiting for world model at %s ...", http_url)
+            time.sleep(2.0)
+
+
 def _prepare_world(http_url: str, mission_override: str | None) -> tuple[dict[str, Any], str]:
     """Reset, set the mission, and return (initial world state, mission used).
 
@@ -47,6 +62,7 @@ def _prepare_world(http_url: str, mission_override: str | None) -> tuple[dict[st
         explicit override  >  mission already set in the world  >  default.
     The current mission is read *before* the reset (which clears it).
     """
+    _wait_for_backend(http_url)
     pre = requests.get(f"{http_url}/api/state", timeout=10)
     pre.raise_for_status()
     existing = (pre.json().get("mission") or "").strip()

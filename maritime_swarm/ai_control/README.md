@@ -44,7 +44,24 @@ implement `build` + `step`) and register it in `navigation_tools.default_registr
 
 ## Running
 
-The world model must be running first (e.g. `environment/docker-compose.dev.yml`).
+### Docker (recommended) — starts automatically
+
+The AI layer is wired into both compose files as the `ai` service, so it boots
+together with the world model and frontend:
+
+```bash
+# put your key in the repo-root .env (GROQ_API_KEY=...), then:
+docker compose -f environment/docker-compose.dev.yml up   # dev (frontend on :5173)
+docker compose -f environment/docker-compose.yml up        # prod (frontend on :3000)
+```
+
+The `ai` container reads `GROQ_API_KEY` (and optional `GROQ_MODEL` / `MISSION`)
+from the repo-root `.env`. Quoted values are tolerated. With no key it falls
+back to the offline heuristic planner.
+
+### Standalone process
+
+The world model must already be running.
 
 ```bash
 # from the repo root
@@ -53,15 +70,21 @@ pip install -r maritime_swarm/ai_control/requirements.txt
 python -m maritime_swarm.ai_control
 ```
 
-Or use the one-shot script that boots the world model + frontend and then the
-brains:
+Or the one-shot script that boots the world model + frontend and then the brains:
 
 ```bash
 export GROQ_API_KEY=sk-...
 ./run_simulation.sh
 ```
 
-Watch it at <http://localhost:5173>.
+Watch it at <http://localhost:5173> (dev) or <http://localhost:3000> (prod).
+
+### Live missions
+
+Type/change the mission in the frontend at any time. The brains watch the
+mission in their observation stream and **re-plan immediately** when it changes —
+no restart needed. Mission precedence at startup: `MISSION` env > the mission
+already set in the world > the built-in default patrol order.
 
 ### Environment variables
 

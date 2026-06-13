@@ -24,3 +24,26 @@ services:
       backend:
         condition: service_healthy
     restart: unless-stopped
+
+  # AI control layer (the "brains"): a separate container that connects to the
+  # world model over its WebSocket/REST contract and drives the agents with
+  # real LLM-selected tools. Waits for the backend to be healthy before starting.
+  ai:
+    image: python:3.11-slim
+    working_dir: /app
+    volumes:
+      - ../maritime_swarm:/app/maritime_swarm:ro
+    environment:
+      - WORLD_HTTP_URL=http://backend:8000
+      - WORLD_WS_URL=ws://backend:8000
+      - PYTHONUNBUFFERED=1
+    # GROQ_API_KEY (and optional GROQ_MODEL / MISSION) come from the repo-root
+    # .env if present; without a key the offline heuristic planner is used.
+    env_file:
+      - path: ../.env
+        required: false
+    command: sh -c "pip install --no-cache-dir requests websockets && python -m maritime_swarm.ai_control"
+    depends_on:
+      backend:
+        condition: service_healthy
+    restart: unless-stopped
