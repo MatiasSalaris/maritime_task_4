@@ -77,8 +77,9 @@ class AgentBrain:
         self._thinking_strategy = False
         self._thinking_reactive = False
         self._last_reactive_think = 0.0
-        self._reported: set[str] = set()
+        self._handled: set[str] = set()   # contacts already reported or being followed
         self._pending_report: dict[str, Any] | None = None   # a just-identified contact
+        self._dynamic_assignment: dict[str, Any] | None = None   # reactive override (e.g. escort)
 
     # ── main loop ──────────────────────────────────────────────────────────
     async def run(self) -> None:
@@ -140,7 +141,8 @@ class AgentBrain:
                 self.baseline_tool = None
                 self.reactive_tool = None
                 self._negotiated_for = None
-                self._reported.clear()
+                self._handled.clear()
+                self._dynamic_assignment = None
                 logger.info("[%s] new mission: %s", self.ctx.agent_id, incoming)
                 asyncio.create_task(self.client.send_cot(f"New mission — re-planning: {incoming}\n"))
             else:
@@ -148,6 +150,8 @@ class AgentBrain:
                 self.assignment = None
                 self.baseline_tool = None
                 self.reactive_tool = None
+                self._dynamic_assignment = None
+                self._handled.clear()
                 self.view.allocation = {}
                 logger.info("[%s] mission cleared — holding.", self.ctx.agent_id)
                 asyncio.create_task(self.client.send_cot("Mission cleared — holding station.\n"))
@@ -245,10 +249,15 @@ class AgentBrain:
             positions[pid] = (p.lat, p.lon)
         member_ids = self.view.live_member_ids()
 
-        # Provisional deterministic split until a proposal lands → instant, non-erratic start.
-        allocation = self.view.allocation or default_allocation(member_ids, self.scene.bounds)
-        allocation = deconflict(allocation, member_ids, positions, self.scene.bounds)
-        new_assignment = allocation.get(self.ctx.agent_id)
+        if self._dynamic_assignment is not None:
+            # A reactive override (e.g. following a discovered vessel) takes
+            # precedence over the negotiated patrol allocation.
+            new_assignment = self._dynamic_assignment
+        else:
+            # Provisional deterministic split until a proposal lands → instant, non-erratic start.
+            allocation = self.view.allocation or default_allocation(member_ids, self.scene.bounds)
+            allocation = deconflict(allocation, member_ids, positions, self.scene.bounds)
+            new_assignment = allocation.get(self.ctx.agent_id)
 
         if new_assignment != self.assignment:
             had_proposal = self.view.brief is not None
@@ -302,21 +311,24 @@ class AgentBrain:
             return None
 
     # ── reactive (tactician) ─────────────────────────────────────────────────
-    def _already_reported(self, contact_id: str) -> bool:
-        if contact_id in self._reported:
+    def _already_handled(self, contact_id: str) -> bool:
+        if contact_id in self._handled:
             return True
         sc = self.view.contacts.get(contact_id)
         return bool(sc and sc.reported)
 
-    def _unreported_suspicious(self, obs: Observation) -> bool:
-        return any(c.is_suspicious and not self._already_reported(c.id) for c in obs.contacts)
+    def _unhandled_suspicious(self, obs: Observation) -> bool:
+        return any(c.is_suspicious and not self._already_handled(c.id) for c in obs.contacts)
 
     def _maybe_react(self, obs: Observation) -> None:
         if self.reactive_tool is not None or self._thinking_reactive:
             return
+        # Once committed to following a vessel, stay on it.
+        if self._dynamic_assignment is not None:
+            return
         pending = self._pending_report is not None
-        # Don't keep reacting to contacts the team has already reported.
-        if not pending and not self._unreported_suspicious(obs):
+        # Don't keep reacting to contacts the team has already handled.
+        if not pending and not self._unhandled_suspicious(obs):
             return
         now = time.monotonic()
         if not pending and (now - self._last_reactive_think) < REACTIVE_INTERVAL_S:
@@ -338,14 +350,32 @@ class AgentBrain:
             if action == "investigate" and cid:
                 self.reactive_tool = self.registry.build("investigate_contact", {"contact_id": cid}, self.ctx)
                 await self.client.send_cot((d.get("reasoning") or f"Investigating {cid}") + "\n")
-            elif action == "report" and cid and cid not in self._reported:
+            elif action == "report" and cid and cid not in self._handled:
                 self.reactive_tool = self.registry.build(
                     "report_contact",
                     {"contact_id": cid, "classification": d.get("classification") or "SUSPICIOUS",
                      "rationale": d.get("rationale") or ""},
                     self.ctx)
-                self._reported.add(cid)
+                self._handled.add(cid)
                 await self.client.send_cot((d.get("reasoning") or f"Reporting {cid}") + "\n")
+            elif action == "escort" and cid:
+                # Discovered the vessel to follow → make following its standing task.
+                standoff = d.get("standoff_m") or 500.0
+                assignment = {"kind": "escort", "contact_id": cid,
+                              "standoff_m": standoff, "bearing_deg": 180.0}
+                # Validate it builds (contact known) before committing.
+                self.baseline_tool = self.registry.build(
+                    "escort_contact",
+                    {"contact_id": cid, "standoff_m": standoff, "bearing_deg": 180.0}, self.ctx)
+                self._dynamic_assignment = assignment
+                self.assignment = assignment
+                self._assignment_label = assignment_label(assignment)
+                self.reactive_tool = None
+                self._handled.add(cid)
+                await self.client.send_cot((d.get("reasoning") or f"Following {cid} at {int(standoff)} m") + "\n")
+                await self.client.send_p2p(
+                    "all", "handoff", {"assignment": assignment},
+                    reasoning=f"Following unreported vessel {cid} at {int(standoff)} m.")
             # else: continue on baseline
         except ToolError as exc:
             logger.info("[%s] reactive build rejected (%s)", self.ctx.agent_id, exc)
@@ -375,7 +405,7 @@ class AgentBrain:
                 if active.name == "investigate_contact" and inv.status.value == "done":
                     cid = getattr(active, "contact_id", None)
                     sc = self.view.contacts.get(cid) if cid else None
-                    if sc is not None and not self._already_reported(cid):
+                    if sc is not None and not self._already_handled(cid):
                         self._pending_report = {"id": cid, "label": sc.label, "flagged": sc.flagged}
                 self.reactive_tool = None  # resume the baseline task
             else:

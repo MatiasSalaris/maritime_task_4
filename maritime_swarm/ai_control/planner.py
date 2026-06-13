@@ -25,7 +25,8 @@ from maritime_swarm.llm.groq_client import inferenza_json
 
 logger = logging.getLogger(__name__)
 
-_ACTIONS = {"continue", "investigate", "report"}
+_ACTIONS = {"continue", "investigate", "report", "escort"}
+_FOLLOW_WORDS = ("follow", "shadow", "escort", "track", "tail", "trail")
 
 
 class TacticalPlanner(Protocol):
@@ -40,11 +41,17 @@ def _normalise_reactive(raw: dict[str, Any]) -> dict[str, Any]:
     action = str(raw.get("action") or raw.get("tool") or "continue").lower().strip()
     if action not in _ACTIONS:
         action = "continue"
+    standoff = raw.get("standoff_m")
+    try:
+        standoff = float(standoff) if standoff is not None else None
+    except (TypeError, ValueError):
+        standoff = None
     return {
         "action": action,
         "contact_id": (str(raw.get("contact_id")).strip() if raw.get("contact_id") else None),
         "classification": (str(raw.get("classification") or "").upper().strip() or None),
         "rationale": str(raw.get("rationale") or "").strip(),
+        "standoff_m": standoff,
         "reasoning": str(raw.get("reasoning") or "").strip(),
     }
 
@@ -68,21 +75,36 @@ class HeuristicTactician:
     """No-LLM reactions: investigate a suspicious contact, report once close."""
 
     def decide_reactive(self, obs, ctx, mission, brief, assignment_label, peers, focus=None):
+        follow = any(w in (mission or "").lower() for w in _FOLLOW_WORDS)
+
         if focus and focus.get("id"):
-            # A contact we just identified — report it if it looked suspicious.
-            if focus.get("flagged") or str(focus.get("label", "")).upper() == "UNKNOWN":
+            # A contact we just identified.
+            is_anom = focus.get("flagged") or str(focus.get("label", "")).upper() == "UNKNOWN"
+            if is_anom and follow:
+                return _normalise_reactive({
+                    "action": "escort", "contact_id": focus["id"], "standoff_m": 500,
+                    "reasoning": f"Identified unreported vessel {focus['id']}; following at 500 m.",
+                })
+            if is_anom:
                 return _normalise_reactive({
                     "action": "report", "contact_id": focus["id"], "classification": "ANOMALY",
                     "rationale": "Identified contact does not match a commercial AIS pattern.",
                     "reasoning": f"Identified {focus['id']}; reporting as anomaly.",
                 })
             return _normalise_reactive({"action": "continue"})
+
         suspicious = [c for c in obs.contacts if c.is_suspicious]
         if not suspicious:
             return _normalise_reactive({"action": "continue"})
         nearest = min(suspicious, key=lambda c: haversine_km(obs.lat, obs.lon, c.lat, c.lon))
         dist = haversine_km(obs.lat, obs.lon, nearest.lat, nearest.lon)
-        if dist <= max(0.6, ctx.arrival_km * 2):
+        close = dist <= max(0.8, ctx.identify_km)
+        if close and follow:
+            return _normalise_reactive({
+                "action": "escort", "contact_id": nearest.id, "standoff_m": 500,
+                "reasoning": f"Unreported vessel {nearest.id} identified; following at 500 m.",
+            })
+        if close:
             return _normalise_reactive({
                 "action": "report", "contact_id": nearest.id, "classification": "ANOMALY",
                 "rationale": f"{nearest.label} contact with no commercial AIS match at close range.",

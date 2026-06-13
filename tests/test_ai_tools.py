@@ -199,6 +199,18 @@ def test_heuristic_tactician_investigates_then_reports():
     assert d_near["action"] == "report"
 
 
+def test_heuristic_tactician_follows_on_follow_mission():
+    tac = HeuristicTactician()
+    near = SensedContact(id="c003", lat=37.5005, lon=15.1005, flagged=True)
+    mission = "scan the area and find any unreported vessel. follow it at 500m distance"
+    d = tac.decide_reactive(make_obs(37.5, 15.1, [near]), make_ctx(), mission, None, "PATROL NE", [])
+    assert d["action"] == "escort"
+    assert d["contact_id"] == "c003"
+    # and on a report-only mission it reports instead
+    d2 = tac.decide_reactive(make_obs(37.5, 15.1, [near]), make_ctx(), "report anomalies", None, "PATROL NE", [])
+    assert d2["action"] == "report"
+
+
 def test_registry_has_full_toolset():
     names = set(default_registry().names())
     assert {"go_to", "go_to_poi", "patrol_sector", "investigate_contact",

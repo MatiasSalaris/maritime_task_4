@@ -90,12 +90,16 @@ def tactical_system_prompt() -> str:
         '  - {"action":"continue"}  — nothing warrants reacting; stay on the assigned task.\n'
         '  - {"action":"investigate","contact_id":"<id>"}  — close on a sensed contact to identify it.\n'
         '  - {"action":"report","contact_id":"<id>","classification":"ANOMALY|SUSPICIOUS|BENIGN",'
-        '"rationale":"<one sentence from the evidence>"}  — report a contact to the team.\n\n'
+        '"rationale":"<one sentence from the evidence>"}  — report a contact to the team.\n'
+        '  - {"action":"escort","contact_id":"<id>","standoff_m":500}  — follow/shadow a contact at a '
+        "standoff distance. Use this when the mission tells you to FOLLOW, SHADOW, ESCORT or TRACK a "
+        "vessel and you have identified a qualifying one.\n\n"
         "Rules:\n"
-        "- Only reference contact ids that appear in CONTACTS IN RANGE. Never invent one.\n"
-        "- Investigate UNKNOWN/flagged contacts before reporting; report once you have closed on it "
-        "or have clear evidence. Commercial/fishing AIS contacts are usually benign.\n"
-        "- Honour the mission's reporting criterion if one is given.\n\n"
+        "- Only reference contact ids that appear in CONTACTS IN RANGE (or JUST IDENTIFIED). Never invent one.\n"
+        "- Investigate UNKNOWN/flagged contacts before acting; commercial/fishing AIS contacts are usually benign.\n"
+        "- If the mission says to FIND AND FOLLOW an unreported vessel, escort it once identified "
+        "(use the distance it specifies, e.g. 500 m).\n"
+        "- Otherwise honour the mission's reporting criterion if one is given.\n\n"
         'Respond with ONE JSON object only: {"reasoning":"<one sentence>","action":"...", ...}'
     )
 
