@@ -18,18 +18,23 @@ class ConnectionManager:
         logger.info("Frontend connected (%d total)", len(self._frontend))
 
     def disconnect_frontend(self, ws: WebSocket) -> None:
-        self._frontend.remove(ws)
-        logger.info("Frontend disconnected (%d remaining)", len(self._frontend))
+        # Idempotent: broadcast() may have already pruned a dead socket, and the
+        # handler's finally-block also calls this — guard against double-remove
+        # (a bare list.remove would raise ValueError and, from broadcast(), kill
+        # the engine loop).
+        if ws in self._frontend:
+            self._frontend.remove(ws)
+            logger.info("Frontend disconnected (%d remaining)", len(self._frontend))
 
     async def broadcast(self, data: dict) -> None:
         dead = []
-        for ws in self._frontend:
+        for ws in list(self._frontend):
             try:
                 await ws.send_json(data)
             except Exception:
                 dead.append(ws)
         for ws in dead:
-            self._frontend.remove(ws)
+            self.disconnect_frontend(ws)
 
     # ── Agent connections ─────────────────────────────────────────────────
 

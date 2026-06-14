@@ -129,7 +129,8 @@ async def run_swarm(
 def build_decider(api_key: str | None, model: str, force_fake: bool = False) -> AgentDecider:
     """The real LLM decider when a key is available, else the offline fallback."""
     if api_key and not force_fake:
-        logger.info("Using GroqDecider (real LLM, model=%s)", model)
+        from maritime_swarm.llm.groq_client import _base_url
+        logger.info("Using real LLM | endpoint=%s model=%s", _base_url(), model)
         return GroqDecider(api_key=api_key, model=model)
     logger.warning(
         "No API key (or FAKE_LLM set) — using the offline HeuristicDecider. "

@@ -23,30 +23,36 @@ class WorldStateEngine:
         while self._running:
             t0 = time.monotonic()
 
-            # Advance simulation (no-op for hardware provider)
-            await self.provider.tick(interval)
+            # A single bad tick must never kill the engine: a crash here used to
+            # silently stop all broadcasts (frontend goes blank, agents freeze).
+            # Log and carry on to the next tick instead.
+            try:
+                # Advance simulation (no-op for hardware provider)
+                await self.provider.tick(interval)
 
-            # Expire old in-flight messages
-            message_bus.expire_in_flight(3.0, time.time())
+                # Expire old in-flight messages
+                message_bus.expire_in_flight(3.0, time.time())
 
-            # Build world state snapshot
-            state = await self.provider.get_world_state()
-            payload = state.model_dump()
-            payload["messages_in_flight"] = message_bus.in_flight_dicts()
-            payload["message_log"] = message_bus.log_dicts()
+                # Build world state snapshot
+                state = await self.provider.get_world_state()
+                payload = state.model_dump()
+                payload["messages_in_flight"] = message_bus.in_flight_dicts()
+                payload["message_log"] = message_bus.log_dicts()
 
-            # Push to all frontend connections
-            await manager.broadcast({"type": "world_state", "payload": payload})
+                # Push to all frontend connections
+                await manager.broadcast({"type": "world_state", "payload": payload})
 
-            # Push observations to each connected LLM agent
-            for agent_id in manager.connected_agent_ids():
-                obs = await self.provider.get_observation(
-                    agent_id, message_bus.drain_inbox(agent_id)
-                )
-                if obs:
-                    await manager.send_to_agent(
-                        agent_id, {"type": "observation", "payload": obs.model_dump()}
+                # Push observations to each connected LLM agent
+                for agent_id in manager.connected_agent_ids():
+                    obs = await self.provider.get_observation(
+                        agent_id, message_bus.drain_inbox(agent_id)
                     )
+                    if obs:
+                        await manager.send_to_agent(
+                            agent_id, {"type": "observation", "payload": obs.model_dump()}
+                        )
+            except Exception:
+                logger.exception("Engine tick failed — continuing")
 
             elapsed = time.monotonic() - t0
             sleep = max(0.0, interval - elapsed)

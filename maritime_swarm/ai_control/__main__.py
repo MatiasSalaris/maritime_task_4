@@ -6,8 +6,11 @@ Usage (world model must be running, e.g. via environment/docker-compose):
     python -m maritime_swarm.ai_control
 
 Environment variables:
-    GROQ_API_KEY / API_KEY   LLM key (omit to run the offline heuristic planner)
-    GROQ_MODEL               model name (default llama-3.1-8b-instant)
+    OPENAI_API_KEY           OpenAI key — if set, uses OpenAI (default gpt-4o-mini)
+    GROQ_API_KEY / API_KEY   Groq key (used when no OPENAI_API_KEY); omit all to
+                             run the offline heuristic planner
+    OPENAI_MODEL / GROQ_MODEL  model name override
+    LLM_BASE_URL             OpenAI-compatible endpoint override (auto-set per provider)
     WORLD_HTTP_URL           default http://localhost:8000
     WORLD_WS_URL             default ws://localhost:8000
     MISSION                  override the default patrol mission text
@@ -49,8 +52,19 @@ def main() -> None:
     force_fake = _clean(os.getenv("FAKE_LLM"), "0").lower() in ("1", "true", "yes")
     # Strip surrounding quotes/whitespace: Docker Compose env_file passes values
     # literally (a quoted .env value would otherwise carry the quotes through).
-    api_key = _clean(os.getenv("GROQ_API_KEY") or os.getenv("API_KEY")) or None
-    model = _clean(os.getenv("GROQ_MODEL")) or _DEFAULT_MODEL
+    # Provider selection: an OPENAI_API_KEY switches the whole stack to OpenAI
+    # (and points the OpenAI-compatible client at OpenAI's endpoint); otherwise
+    # fall back to Groq via GROQ_API_KEY / API_KEY.
+    openai_key = _clean(os.getenv("OPENAI_API_KEY")) or None
+    groq_key = _clean(os.getenv("GROQ_API_KEY") or os.getenv("API_KEY")) or None
+    if openai_key:
+        api_key = openai_key
+        if not _clean(os.getenv("LLM_BASE_URL") or os.getenv("GROQ_BASE_URL")):
+            os.environ["LLM_BASE_URL"] = "https://api.openai.com/v1"
+        model = _clean(os.getenv("OPENAI_MODEL") or os.getenv("GROQ_MODEL")) or "gpt-4o-mini"
+    else:
+        api_key = groq_key
+        model = _clean(os.getenv("GROQ_MODEL")) or _DEFAULT_MODEL
 
     decider = build_decider(api_key, model, force_fake=force_fake)
 
