@@ -13,8 +13,8 @@ def on_mission_intent(agent, event: dict) -> None:
     """Accept a mission briefing into distributed and cognitive state."""
     mission = {
         "mission_id": str(event["mission_id"]),
-        "nlp_mission": str(event["nlp_mission"]),
         "parsed_intent": dict(event["parsed_intent"]),
+        "briefing": dict(event.get("briefing", {})),
         "entry_node": str(event["entry_node"]),
         "status": "accepted",
     }

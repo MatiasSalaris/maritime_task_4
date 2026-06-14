@@ -18,7 +18,7 @@ async def receive_operator_mission(agent, mission_id: str, mission: str, operato
         f"{Colors.BOLD}DIRECT_OPERATOR_NLP received by proximity ({distance:.1f}m). Acting as temporary entry node.{Colors.RESET}",
     )
     agent.logger.log(agent.id, f"OPERATOR_NLP raw={mission!r}")
-    agent.logger.log(agent.id, f"ENTRY_NODE parsed mission={parsed}; broadcasting MISSION_INTENT to peers")
+    agent.logger.log(agent.id, f"ENTRY_NODE parsed mission={parsed}; broadcasting reformulated MISSION_INTENT to peers")
     await agent.bus.publish(mission_intent(mission_id, mission, parsed, agent.id))
 
 

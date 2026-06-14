@@ -78,32 +78,22 @@ def _auto_search_box(ctx: ToolContext, sector: str) -> tuple[float, float, float
     if ctx.bounds is None:
         raise ToolError("search_area needs operating-area bounds")
     b = ctx.bounds
-    sec = (sector or "AUTO").upper()
+    sec = (sector or "").upper()
     if sec in coord.SECTORS:
         return coord.sector_box(b, sec)
     if sec == "ALL":
         return (b.lat_min, b.lat_max, b.lon_min, b.lon_max)
-    if sec == "AUTO":
-        # Three-agent demo split: agent_0=west, agent_1=center, agent_2=east.
-        idx = next((int(ch) for ch in reversed(ctx.agent_id) if ch.isdigit()), 0) % 3
-        width = (b.lon_max - b.lon_min) / 3.0
-        lo_lon = b.lon_min + idx * width
-        hi_lon = b.lon_min + (idx + 1) * width
-        return (b.lat_min, b.lat_max, lo_lon, hi_lon)
     if sec == "WEST":
         mid = (b.lon_min + b.lon_max) / 2
         return (b.lat_min, b.lat_max, b.lon_min, mid)
     if sec == "EAST":
         mid = (b.lon_min + b.lon_max) / 2
         return (b.lat_min, b.lat_max, mid, b.lon_max)
-    raise ToolError("search_area sector must be AUTO, ALL, WEST, EAST, NW, NE, SW, SE or CENTER")
+    raise ToolError("search_area sector must be an explicit choice: ALL, WEST, EAST, NW, NE, SW, SE or CENTER")
 
 
 def _search_area_label(ctx: ToolContext, sector: str) -> str:
-    sec = (sector or "AUTO").upper()
-    if sec == "AUTO":
-        idx = next((int(ch) for ch in reversed(ctx.agent_id) if ch.isdigit()), 0) % 3
-        return ["area ovest", "area centrale", "area est"][idx]
+    sec = (sector or "").upper()
     if sec == "ALL":
         return "tutta l’area"
     return f"settore {sec}"
@@ -310,14 +300,13 @@ class PatrolSectorTool(Tool):
 class SearchAreaTool(Tool):
     name = "search_area"
     description = (
-        "coverage search using a deterministic lawn-mower pattern inside the operating area. "
-        "Use for finding a missing buoy or unknown object; sector AUTO splits the AOR among agents."
+        "coverage search using a lawn-mower pattern inside an explicit operating-area sector. "
+        "Use for finding a missing buoy or unknown object after choosing a sector from current state."
     )
     parameters = {
         "sector": {
             "type": "string",
-            "description": "AUTO, ALL, WEST, EAST, NW, NE, SW, SE or CENTER. AUTO gives each agent a different strip.",
-            "required": False,
+            "description": "ALL, WEST, EAST, NW, NE, SW, SE or CENTER. Choose explicitly from current state.",
         },
         "spacing_km": {
             "type": "number",
@@ -341,7 +330,9 @@ class SearchAreaTool(Tool):
 
     @classmethod
     def build(cls, args: dict[str, Any], ctx: ToolContext) -> "SearchAreaTool":
-        sector = str(args.get("sector") or "AUTO").upper().strip()
+        sector = str(args.get("sector") or "").upper().strip()
+        if not sector or sector == "AUTO":
+            raise ToolError("search_area requires an explicit sector chosen from current state; AUTO is not allowed")
         spacing = args.get("spacing_km")
         spacing_km = None if spacing is None else max(0.3, min(20.0, float(spacing)))
         priority = str(args.get("priority") or "balanced").lower().strip()
@@ -668,17 +659,12 @@ class HoldPositionTool(Tool):
 
 
 def default_registry() -> ToolRegistry:
-    """Default tools for the live buoy-search demo.
-
-    POI/rendezvous tools are intentionally not exposed here: the current
-    scenario has no operator-defined POIs, and listing those tools encourages
-    the LLM to route to stale poi_1/poi_2/poi_3 waypoints instead of searching
-    the marked area.
-    """
+    """Default tools exposed to each agent."""
     registry = ToolRegistry()
     for tool in (
-        GoToTool, MoveTool, SearchAreaTool, PatrolSectorTool, InvestigateContactTool,
-        ReportContactTool, EscortContactTool, HoldPositionTool,
+        GoToTool, MoveTool, GoToPoiTool, SearchAreaTool, PatrolSectorTool,
+        InvestigateContactTool, ReportContactTool, EscortContactTool,
+        VisitPoisTool, RendezvousTool, HoldPositionTool,
     ):
         registry.register(tool)
     return registry

@@ -14,6 +14,7 @@ from typing import Any
 
 from maritime_swarm.ai_control.coordination import SECTORS
 from maritime_swarm.ai_control.geo import haversine_km
+from maritime_swarm.ai_control.message_constraints import P2P_TEXT_MAX_CHARS
 from maritime_swarm.ai_control.observation import Observation
 from maritime_swarm.ai_control.scene import Scene
 from maritime_swarm.ai_control.tools import ToolContext, ToolRegistry
@@ -30,18 +31,21 @@ def build_decision_system_prompt(registry: ToolRegistry) -> str:
         "peer want the same thing, the LOWER id keeps it and the other takes the complement. Respect "
         "commitments; cover a silent peer. Only use contact/POI ids shown to you — never invent ids.\n\n"
         "Write the JSON fields `reasoning` and every message `content` in Italian. Keep tool names, "
-        "agent ids, contact ids, sector names and JSON keys unchanged.\n\n"
-        "For missions like finding a missing buoy/object in an area, prefer search_area({\"sector\":\"AUTO\"}) "
-        "until a real contact id is sensed. If the mission says speed/velocità/rapido, call "
-        "search_area with priority=\"speed\". If it says coverage/copertura/completa, use "
-        "priority=\"coverage\". Do not invent waypoints or POI ids. In human-facing reasoning/messages, "
-        "do NOT say AUTO or internal tool terms; say your assigned search lane/area and why.\n\n"
+        "agent ids, contact ids, sector names and JSON keys unchanged. Peer messages are telegrams: "
+        f"each content must be <= {P2P_TEXT_MAX_CHARS} characters, one line, action/sector/reason only.\n\n"
+        "For missions like finding a missing buoy/object in an area, choose an EXPLICIT search sector "
+        "from your physical position, sensor range, peer positions/tasks, recent proposals and mission "
+        "priority. Use proposal/ack/objection to converge; do not rely on fixed id-to-area lanes. "
+        "Do not use AUTO. If the mission says speed/velocità/rapido, call search_area with "
+        "priority=\"speed\". If it says coverage/copertura/completa, use priority=\"coverage\". "
+        "Do not invent waypoints or POI ids. In human-facing reasoning/messages, say the sector you "
+        "chose and why it is appropriate from the current state.\n\n"
         "ACTIONS (pick exactly one):\n"
         f"{registry.compact_block()}\n\n"
         "MSG TYPES: proposal, ack, objection, handoff, report, status.\n"
-        'Reply with ONE JSON object only: {"reasoning":"<1-2 sentences>","messages":[{"to":"all|agent_0|agent_1|agent_2","type":"<type>","content":"<short>"}],"action":{"tool":"<name>","args":{...}}}'
+        f'Reply with ONE JSON object only: {{"reasoning":"<1-2 sentences>","messages":[{{"to":"all|agent_0|agent_1|agent_2","type":"<type>","content":"<={P2P_TEXT_MAX_CHARS} chars>"}}],"action":{{"tool":"<name>","args":{{...}}}}}}'
         "  (messages may be []).\n"
-        'EXAMPLE: {"reasoning":"Copro la mia area assegnata con passaggi larghi per privilegiare la velocità.","messages":[{"to":"all","type":"proposal","content":"Avvio ricerca rapida nella mia area assegnata, senza sovrappormi agli altri."}],"action":{"tool":"search_area","args":{"sector":"AUTO","priority":"speed"}}}'
+        'EXAMPLE: {"reasoning":"Sono vicino al quadrante NW e i peer sono piu a est; propongo di coprire NW con passaggi larghi per privilegiare la velocità.","messages":[{"to":"all","type":"proposal","content":"PROPOSTA: io NW; motivo vicino a NW; peer coprano est/sud."}],"action":{"tool":"search_area","args":{"sector":"NW","priority":"speed"}}}'
     )
 
 
@@ -54,7 +58,7 @@ def build_decision_user_prompt(
 ) -> str:
     """The full state the asset reasons on: per-agent, shared (mission/comms), world."""
     b = scene.bounds
-    L = [f"MISSION (verbatim): {mission}", ""]
+    L = [f"MISSION INTENT AVAILABLE TO THIS AGENT: {mission}", ""]
 
     # ── per-agent state ───────────────────────────────────────────────────
     L.append("YOUR STATE:")
@@ -69,7 +73,8 @@ def build_decision_user_prompt(
     source = getattr(scene, "source", "operating area")
     L.append(f"OPERATING AREA ({source}): lat {b.lat_min:.3f}..{b.lat_max:.3f}, lon {b.lon_min:.3f}..{b.lon_max:.3f}.")
     L.append("Treat this as the marked patrol area. Stay inside it unless a contact task explicitly requires leaving it.")
-    L.append(f"SECTORS for patrol_sector/search_area: AUTO, ALL, WEST, EAST, {', '.join(SECTORS)}.")
+    L.append(f"SECTORS for patrol_sector/search_area: ALL, WEST, EAST, {', '.join(SECTORS)}.")
+    L.append("Sector choice is part of your cognitive decision: pick an explicit sector from the state, never AUTO.")
     if scene.pois:
         L.append("POIs: " + "; ".join(f"{p.id}({p.label})@{p.lat:.3f},{p.lon:.3f}" for p in scene.pois))
     L.append("")

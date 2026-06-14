@@ -9,6 +9,7 @@ import pytest
 from maritime_swarm.ai_control import coordination as coord
 from maritime_swarm.ai_control.blackboard import SwarmView
 from maritime_swarm.ai_control.geo import bearing_deg, destination, haversine_km
+from maritime_swarm.ai_control.message_constraints import P2P_TEXT_MAX_CHARS
 from maritime_swarm.ai_control.navigation_tools import (
     EscortContactTool,
     GoToPoiTool,
@@ -16,6 +17,7 @@ from maritime_swarm.ai_control.navigation_tools import (
     MoveTool,
     PatrolSectorTool,
     ReportContactTool,
+    SearchAreaTool,
     VisitPoisTool,
     default_registry,
 )
@@ -105,6 +107,15 @@ def test_patrol_and_escort_and_visit_build():
     VisitPoisTool.build({"poi_ids": ["poi_1", "poi_2"]}, make_ctx(obs=make_obs(37.5, 15.1)))
 
 
+def test_search_area_requires_explicit_cognitive_sector():
+    ctx = make_ctx(obs=make_obs(37.5, 15.1))
+    with pytest.raises(ToolError):
+        SearchAreaTool.build({"sector": "AUTO"}, ctx)
+    with pytest.raises(ToolError):
+        SearchAreaTool.build({}, ctx)
+    assert SearchAreaTool.build({"sector": "NW", "priority": "speed"}, ctx).sector == "NW"
+
+
 # ── coordination helpers (still used as utilities) ───────────────────────────────
 def test_sectors_distinct_centers():
     centers = {coord.sector_center(BOUNDS, s) for s in coord.SECTORS}
@@ -149,6 +160,16 @@ def test_normalise_decision_shapes_output():
     assert d["tool"] == "move" and d["args"] == {"direction": "south"}
     assert len(d["messages"]) == 1                     # empty-content msg dropped
     assert d["messages"][0]["type"] == "status"        # unknown type coerced
+
+
+def test_normalise_decision_enforces_telegraphic_message_limit():
+    long = "Propongo di cercare nel settore NW perche sono gia molto vicino al quadrante nord occidentale e posso evitare sovrapposizioni con tutti i peer."
+    d = normalise_decision({
+        "messages": [{"to": "all", "type": "proposal", "content": long}],
+        "action": {"tool": "hold_position", "args": {}},
+    })
+    assert len(d["messages"][0]["content"]) <= P2P_TEXT_MAX_CHARS
+    assert "\n" not in d["messages"][0]["content"]
 
 
 def test_heuristic_decider_runs():

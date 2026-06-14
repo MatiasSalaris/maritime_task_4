@@ -11,6 +11,7 @@ import logging
 from typing import Any, Protocol
 
 from maritime_swarm.ai_control.geo import haversine_km
+from maritime_swarm.ai_control.message_constraints import P2P_MAX_MESSAGES_PER_DECISION, telegraphic_text
 from maritime_swarm.ai_control.observation import Observation
 from maritime_swarm.ai_control.prompts import build_decision_system_prompt, build_decision_user_prompt
 from maritime_swarm.ai_control.scene import Scene
@@ -48,7 +49,7 @@ def normalise_decision(raw: dict[str, Any]) -> dict[str, Any]:
     for m in msgs_raw if isinstance(msgs_raw, list) else []:
         if not isinstance(m, dict):
             continue
-        text = str(m.get("content") or m.get("text") or "").strip()
+        text = telegraphic_text(m.get("content") or m.get("text") or "")
         if not text:
             continue
         mtype = str(m.get("type") or "status").lower().strip()
@@ -58,7 +59,7 @@ def normalise_decision(raw: dict[str, Any]) -> dict[str, Any]:
 
     return {
         "reasoning": str(raw.get("reasoning") or "").strip(),
-        "messages": messages[:3],
+        "messages": messages[:P2P_MAX_MESSAGES_PER_DECISION],
         "tool": tool,
         "args": args,
     }
@@ -102,6 +103,18 @@ class HeuristicDecider:
 
     _SECTORS = ["NW", "NE", "SW", "SE"]
 
+    def _sector_from_position(self, obs, scene) -> str:
+        b = scene.bounds
+        lat_mid = (b.lat_min + b.lat_max) / 2
+        lon_mid = (b.lon_min + b.lon_max) / 2
+        if obs.lat >= lat_mid and obs.lon <= lon_mid:
+            return "NW"
+        if obs.lat >= lat_mid and obs.lon > lon_mid:
+            return "NE"
+        if obs.lat < lat_mid and obs.lon <= lon_mid:
+            return "SW"
+        return "SE"
+
     def decide(self, obs, ctx, scene, mission, peers, shared_contacts, messages, current_task, registry,
                task_status="idle", silent_peers=None, outbox=None):
         buoys = [c for c in obs.contacts if c.is_buoy]
@@ -120,8 +133,17 @@ class HeuristicDecider:
                 "messages": [{"to": "all", "type": "status", "content": f"Ispeziono {nearest.id}."}],
                 "action": {"tool": "investigate_contact", "args": {"contact_id": nearest.id}},
             })
+        mission_l = (mission or "").lower()
+        if any(word in mission_l for word in ("patrol", "pattuglia", "anomaly", "anomalia", "ais")):
+            sector = self._sector_from_position(obs, scene)
+            return normalise_decision({
+                "reasoning": f"Nessun contatto rilevato; dalla mia posizione il settore {sector} e' la copertura piu vicina.",
+                "messages": [],
+                "action": {"tool": "patrol_sector", "args": {"sector": sector}},
+            })
+        sector = self._sector_from_position(obs, scene)
         return normalise_decision({
-            "reasoning": f"Nessun contatto rilevato; eseguo una ricerca a strisce con priorità {_search_priority(mission)} nella mia fascia automatica dell’AOR.",
+            "reasoning": f"Nessun contatto rilevato; dalla mia posizione propongo ricerca nel settore {sector} con priorità {_search_priority(mission)}.",
             "messages": [],
-            "action": {"tool": "search_area", "args": {"sector": "AUTO", "priority": _search_priority(mission)}},
+            "action": {"tool": "search_area", "args": {"sector": sector, "priority": _search_priority(mission)}},
         })

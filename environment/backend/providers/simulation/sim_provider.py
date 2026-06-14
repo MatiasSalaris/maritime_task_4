@@ -1,5 +1,6 @@
 from __future__ import annotations
 import math
+import os
 import time
 import uuid
 from models.agent import AgentState, AgentStatus, AgentType, Observation, Position, Action
@@ -16,6 +17,15 @@ _MAX_HISTORY = 400   # path history points kept per agent
 _MIN_HIST_DIST_M = 8 # minimum movement to record a new history point
 _AGENT_COLORS = ["#00d4ff", "#00ff88", "#ff8800"]
 _MAX_AGENT_SPEED_KN = 10_000_000.0
+
+
+def _mission_entry_agent_id() -> str:
+    try:
+        from config import settings
+        configured = getattr(settings, "mission_entry_agent_id", None)
+    except Exception:
+        configured = None
+    return (configured or os.getenv("MISSION_ENTRY_AGENT_ID") or "agent_0").strip() or "agent_0"
 
 _UAV_ALTITUDE_M         = 1000.0
 _UAV_HALF_FOV_DEG       = 60.0   # camera half-FOV
@@ -108,7 +118,7 @@ class SimulatedPlatformProvider(AbstractPlatformProvider):
             contacts_in_range=visible,
             messages_inbox=[m.model_dump() for m in inbox],
             world_time=self.world_time,
-            mission=self.mission,
+            mission=self.mission if agent_id == _mission_entry_agent_id() else None,
             mission_status=self.mission_status,
             mission_result=self.mission_result,
             aor=self.aor,

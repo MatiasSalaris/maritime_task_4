@@ -25,11 +25,15 @@
   }
 
   function messageText(m) {
-    return clean(m.content?.text || '')
+    return m.content?.text || ''
   }
 
   function reasoningText(m) {
-    return clean(m.reasoning || '')
+    return m.reasoning || ''
+  }
+
+  function isMissionBriefing(m) {
+    return m.content?.kind === 'mission_intent'
   }
 
   function priorityFromMission(mission) {
@@ -39,24 +43,9 @@
     return 'bilanciata'
   }
 
-  function laneName(agentId) {
-    if (agentId === 'agent_0') return 'area ovest'
-    if (agentId === 'agent_1') return 'area centrale'
-    if (agentId === 'agent_2') return 'area est'
-    return 'area assegnata'
-  }
-
-  function readableReasoning(text, agentId) {
-    return clean(text)
-      .replaceAll('AUTO', laneName(agentId))
-      .replace(/fascia automatica dell.?AOR/gi, laneName(agentId))
-      .replace(/fascia automatica/gi, laneName(agentId))
-      .replace(/\bAOR\b/g, 'area operativa')
-  }
-
   function isSearchProposal(m) {
     const text = clean(`${messageText(m)} ${reasoningText(m)}`).toLowerCase()
-    return m.msg_type === 'proposal' && (text.includes('ricerca') || text.includes('boa') || text.includes('auto'))
+    return !isMissionBriefing(m) && m.msg_type === 'proposal' && (text.includes('ricerca') || text.includes('boa') || text.includes('auto'))
   }
 
   function isSearchAck(m) {
@@ -65,26 +54,9 @@
   }
 
   $: rawMessages = ($worldState.message_log ?? []).filter(m => m.msg_type !== 'status')
-  $: searchStarts = rawMessages.filter(isSearchProposal)
-  $: searchAcks = rawMessages.filter(isSearchAck)
   $: reports = rawMessages.filter(m => m.msg_type === 'report')
 
   $: messages = [
-    searchStarts.length ? {
-      kind: 'phase',
-      t: Math.min(...searchStarts.map(m => m.sent_at ?? 0)),
-      title: 'Ricerca distribuita',
-      body: searchStarts
-        .map(m => `${agentName(m.from_agent)} copre ${laneName(m.from_agent)}.`)
-        .filter((v, i, a) => a.indexOf(v) === i)
-        .join(' '),
-    } : null,
-    searchAcks.length ? {
-      kind: 'phase',
-      t: Math.min(...searchAcks.map(m => m.sent_at ?? 0)),
-      title: 'Coordinamento confermato',
-      body: 'Gli agenti confermano la divisione dell’area e continuano senza sovrapporsi.',
-    } : null,
     ...reports.map(m => ({
       kind: 'report',
       t: m.sent_at ?? 0,
@@ -92,19 +64,21 @@
       to: m.to_agent,
       type: m.msg_type,
       title: `${agentName(m.from_agent)} segnala il risultato`,
-      body: explainMessage(m),
+      body: rawMessageBody(m),
       detail: reasoningText(m),
     })),
     ...rawMessages
-      .filter(m => !isSearchProposal(m) && !isSearchAck(m) && m.msg_type !== 'report')
+      .filter(m => m.msg_type !== 'report')
       .map(m => ({
         kind: 'message',
         t: m.sent_at ?? 0,
         from: m.from_agent,
         to: m.to_agent,
         type: m.msg_type,
-        title: `${agentName(m.from_agent)} -> ${agentName(m.to_agent)} · ${TYPE_LABEL[m.msg_type] ?? m.msg_type}`,
-        body: explainMessage(m),
+        title: isMissionBriefing(m)
+          ? `${agentName(m.from_agent)} -> ${agentName(m.to_agent)} · briefing riformulato`
+          : `${agentName(m.from_agent)} -> ${agentName(m.to_agent)} · ${TYPE_LABEL[m.msg_type] ?? m.msg_type}`,
+        body: rawMessageBody(m),
         detail: reasoningText(m),
       })),
   ].filter(Boolean)
@@ -130,7 +104,7 @@
       t: entry.sent_at ?? 0,
       from: a.id,
       title: `${a.name} · ragionamento`,
-      body: readableReasoning(entry.text, a.id),
+      body: entry.text || '',
     })))
     .filter(e => e.body)
 
@@ -159,22 +133,13 @@
   }
 
   function humanTask(task, agentId) {
-    const text = clean(task)
+    const text = task || ''
     if (!text) return ''
-    if (text.toLowerCase().includes('missione completata')) return text
-    if (text.toLowerCase().includes('ricerca')) return `Sta cercando nella ${laneName(agentId)}.`
-    return text.replaceAll('AUTO', 'area assegnata')
+    return text
   }
 
-  function explainMessage(m) {
-    const text = messageText(m) || reasoningText(m)
-    const lower = clean(`${messageText(m)} ${reasoningText(m)}`).toLowerCase()
-    if (m.msg_type === 'report' && (lower.includes('boa') || lower.includes('buoy'))) {
-      return 'La boa è stata rilevata. La ricerca può terminare.'
-    }
-    if (isSearchProposal(m)) return `${agentName(m.from_agent)} prende ${laneName(m.from_agent)} per evitare sovrapposizioni.`
-    if (isSearchAck(m)) return `${agentName(m.from_agent)} conferma la propria area di ricerca.`
-    return text.replaceAll('AUTO', 'area assegnata').replaceAll('fascia', 'area')
+  function rawMessageBody(m) {
+    return messageText(m) || reasoningText(m)
   }
 
   function download(name, mime, content) {

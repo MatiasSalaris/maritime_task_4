@@ -2,6 +2,7 @@ from __future__ import annotations
 import logging
 import uuid
 import time
+import os
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect
 from engine.connection_manager import manager
 from engine.message_bus import message_bus
@@ -10,6 +11,23 @@ from models.messages import P2PMessage, MessageType
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
+P2P_TEXT_MAX_CHARS = int(os.getenv("P2P_TEXT_MAX_CHARS", "120"))
+
+
+def _telegraphic_text(value: object) -> str:
+    text = " ".join(str(value or "").split()).strip()
+    if len(text) <= P2P_TEXT_MAX_CHARS:
+        return text
+    return text[: max(0, P2P_TEXT_MAX_CHARS - 3)].rstrip() + "..."
+
+
+def _constrain_content(content: object) -> dict:
+    if not isinstance(content, dict):
+        return {}
+    constrained = dict(content)
+    if "text" in constrained:
+        constrained["text"] = _telegraphic_text(constrained["text"])
+    return constrained
 
 
 @router.websocket("/agent/{agent_id}")
@@ -42,7 +60,7 @@ async def agent_ws(ws: WebSocket, agent_id: str) -> None:
                     from_agent=agent_id,
                     to_agent=payload.get("to", "all"),
                     msg_type=MessageType(payload.get("msg_type", "status")),
-                    content=payload.get("content", {}),
+                    content=_constrain_content(payload.get("content", {})),
                     reasoning=payload.get("reasoning"),
                     sent_at=time.time(),
                 )

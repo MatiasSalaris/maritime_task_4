@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import os
 import time
 from typing import Any
 
@@ -37,6 +38,10 @@ _CRUISE_BY_TYPE = {"USV": _DEMO_CRUISE_KN, "UAV": _DEMO_CRUISE_KN}
 
 def _cruise_for(agent_type: str) -> float:
     return _CRUISE_BY_TYPE.get(agent_type.upper(), _DEMO_CRUISE_KN)
+
+
+def _mission_entry_agent_id() -> str:
+    return (os.getenv("MISSION_ENTRY_AGENT_ID") or "agent_0").strip() or "agent_0"
 
 
 def _wait_for_backend(http_url: str, timeout_s: float = 120.0) -> None:
@@ -90,7 +95,7 @@ async def run_swarm(
     state, mission = await asyncio.to_thread(_prepare_world, http_url, mission)
     scene = Scene.from_world_state(state)
     if mission:
-        logger.info("Mission: %s", mission)
+        logger.info("Mission loaded into world model; entry node will receive operator text.")
     else:
         logger.info("No mission set — agents are idle until a mission is submitted.")
     registry = default_registry()
@@ -107,6 +112,7 @@ async def run_swarm(
     )
 
     brains: list[AgentBrain] = []
+    entry_agent_id = _mission_entry_agent_id()
     for a in agents:
         agent_type = str(a.get("type", "USV")).upper()
         sensor_km = float(a.get("sensor_range_km") or 4.0)
@@ -121,7 +127,10 @@ async def run_swarm(
             bounds=scene.bounds,
         )
         client = WorldModelClient(ws_url, a["id"])
-        brains.append(AgentBrain(client, ctx, decider, scene, mission, registry, limiter=limiter))
+        brains.append(AgentBrain(
+            client, ctx, decider, scene, None, registry,
+            limiter=limiter, entry_agent_id=entry_agent_id,
+        ))
 
     await asyncio.gather(*(b.run() for b in brains))
 

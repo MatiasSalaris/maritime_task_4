@@ -4,12 +4,18 @@ from __future__ import annotations
 
 
 def mission_intent(mission_id: str, mission: str, parsed: dict, entry_node: str) -> dict:
-    """Build a peer broadcast carrying parsed operator intent."""
+    """Build a peer broadcast carrying only reformulated operator intent."""
+    briefing = {
+        "objective": parsed.get("objective"),
+        "priority": parsed.get("priority"),
+        "constraints": parsed.get("constraints", []),
+        "local_intent": parsed.get("local_intent"),
+    }
     return {
         "type": "MISSION_INTENT",
         "mission_id": mission_id,
-        "nlp_mission": mission,
         "parsed_intent": parsed,
+        "briefing": briefing,
         "entry_node": entry_node,
         "sender": entry_node,
     }

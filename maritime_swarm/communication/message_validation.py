@@ -5,7 +5,7 @@ from __future__ import annotations
 from typing import Any
 
 REQUIRED_FIELDS = {
-    "MISSION_INTENT": {"mission_id", "nlp_mission", "parsed_intent", "entry_node", "sender"},
+    "MISSION_INTENT": {"mission_id", "parsed_intent", "briefing", "entry_node", "sender"},
     "BUOY_DETECTED": {"contact_id", "contact_pos", "detected_by", "sender"},
     "TASK_TRIGGER": {"task_id", "contact_id", "target_pos", "sender"},
     "TASK_BID": {"task_id", "utility", "sender"},

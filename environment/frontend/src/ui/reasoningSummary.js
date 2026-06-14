@@ -1,43 +1,23 @@
 export function shortText(value, max = 110) {
-  const text = (value ?? '').replace(/\s+/g, ' ').trim()
+  const text = String(value ?? '')
   if (text.length <= max) return text
-  return text.slice(0, max - 1).trimEnd() + '...'
+  return text.slice(0, Math.max(0, max - 3)) + '...'
 }
 
 export function reasoningLines(cot) {
   return (cot ?? '')
     .split('\n')
-    .map(s => s.trim())
-    .filter(Boolean)
-    .filter(s => !s.toLowerCase().startsWith('new mission'))
-    .filter(s => !s.toLowerCase().startsWith('mission cleared'))
-}
-
-function translateTask(text) {
-  return text
-    .replace(/^Awaiting orders$/i, 'In attesa di ordini')
-    .replace(/^Idle$/i, 'In attesa')
-    .replace(/^Patrolling sector /i, 'Pattuglia ')
-    .replace(/^Patrolling /i, 'Pattuglia ')
-    .replace(/^Intercepting /i, 'Ispeziona ')
-    .replace(/^Escorting /i, 'Segue ')
-    .replace(/^Transit to /i, 'Vai a ')
-    .replace(/^Identified /i, 'Identificato ')
-    .replace(/^Reported /i, 'Segnalato ')
+    .filter(s => s.trim())
 }
 
 function cleanTask(task, compact = true) {
-  const text = translateTask(task || 'Awaiting orders')
+  const text = task || 'Awaiting orders'
   return compact ? shortText(text, 80) : text
 }
 
 function compactReason(line, compact = true) {
   if (!line) return ''
-  const text = line
-    .replace(/\bI (?:will|should|am going to)\b/gi, 'I')
-    .replace(/\bmission\b/gi, 'order')
-    .replace(/\boperating area\b/gi, 'area')
-  return compact ? shortText(text, 120) : text
+  return compact ? shortText(line, 120) : line
 }
 
 function messageTypeLabel(type) {
