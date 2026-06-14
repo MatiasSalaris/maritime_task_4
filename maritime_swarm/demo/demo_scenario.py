@@ -8,6 +8,7 @@ import math
 from maritime_swarm.agent_runtime.maritime_agent import MaritimeAgent
 from maritime_swarm.communication.async_event_bus import EventBus
 from maritime_swarm.demo.demo_logger import DemoLogger
+from maritime_swarm.debugging import capture_agent_state
 from maritime_swarm.domain.utility_scoring import format_bids
 
 MISSION_TEXT = "Find the missing buoy in this region, prioritise speed, and stop once it is detected."
@@ -82,3 +83,9 @@ async def _final_snapshot(agents: dict[str, MaritimeAgent], logger: DemoLogger) 
             f"search_winner={task.get('winner')} search_status={task.get('status')} avoidance={task.get('avoidance')}, "
             f"handoff_winner={handoff.get('winner')} handoff_bids={format_bids(handoff.get('bids', {}))}",
         )
+    if getattr(logger, "debug_enabled", False) and hasattr(logger, "log_debug"):
+        payload = {
+            agent.id: capture_agent_state(agent, limit_events=50, limit_traces=20)
+            for agent in agents.values()
+        }
+        logger.log_debug("SIM", "final_swarm_snapshot", payload)

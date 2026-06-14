@@ -79,6 +79,8 @@ class AgentBrain:
         self._outbox: list[dict[str, Any]] = []   # recent messages we sent (own state)
         self._aor_signature: str | None = None
         self._mission_complete_contact: str | None = None
+        self._mission_started_at: float | None = None
+        self._last_mission_status: str = "idle"
 
     # ── main loop ──────────────────────────────────────────────────────────
     async def run(self) -> None:
@@ -124,16 +126,16 @@ class AgentBrain:
             self._seen_contacts |= new_ids
             self._dirty = True
 
-        if await self._maybe_stop_for_completed_mission(obs):
-            return
-        if await self._maybe_complete_buoy_mission(obs):
-            return
-
         # status heartbeat (always — keeps peer awareness alive even while idle)
         await self._maybe_broadcast_status(obs)
 
         # mission set / changed / cleared
         if not self._handle_mission(obs):
+            return
+
+        if await self._maybe_stop_for_completed_mission(obs):
+            return
+        if await self._maybe_complete_buoy_mission(obs):
             return
 
         # decide (LLM) on interval or event, honouring any rate-limit cooldown
@@ -151,7 +153,14 @@ class AgentBrain:
     # ── mission ──────────────────────────────────────────────────────────────
     def _handle_mission(self, obs: Observation) -> bool:
         incoming = (obs.mission or "").strip()
-        if incoming != (self.mission or ""):
+        mission_changed = incoming != (self.mission or "")
+        mission_reactivated = bool(
+            incoming
+            and not mission_changed
+            and obs.mission_status == "active"
+            and self._last_mission_status == "completed"
+        )
+        if mission_changed or mission_reactivated:
             if incoming:
                 self.mission = incoming
                 self.active_tool = None
@@ -161,6 +170,11 @@ class AgentBrain:
                 self._last_decision = 0.0
                 self._outbox.clear()
                 self._mission_complete_contact = None
+                self._mission_started_at = obs.world_time
+                self.view.contacts.clear()
+                self.view.messages.clear()
+                self._last_msg_count = 0
+                self._seen_contacts = {c.id for c in obs.contacts}
                 logger.info("[%s] new mission: %s", self.ctx.agent_id, incoming)
                 asyncio.create_task(self.client.send_cot(f"New mission — re-thinking: {incoming}\n"))
                 asyncio.create_task(self.client.send_action({
@@ -173,10 +187,16 @@ class AgentBrain:
                 self.active_tool = None
                 self._action_spec = None
                 self._mission_complete_contact = None
+                self._mission_started_at = None
+                self.view.contacts.clear()
+                self.view.messages.clear()
+                self._last_msg_count = 0
+                self._seen_contacts.clear()
                 logger.info("[%s] mission cleared — holding.", self.ctx.agent_id)
                 asyncio.create_task(self.client.send_cot("Mission cleared — holding station.\n"))
                 asyncio.create_task(self.client.send_action(
                     {"speed_kn": 0.0, "planned_path": [], "current_task": "Idle — awaiting orders"}))
+        self._last_mission_status = obs.mission_status
         return self.mission is not None
 
     async def _maybe_stop_for_completed_mission(self, obs: Observation) -> bool:
@@ -213,6 +233,8 @@ class AgentBrain:
                 break
         if contact_id is None:
             for cid, sc in self.view.contacts.items():
+                if self._mission_started_at is not None and sc.updated_t < self._mission_started_at:
+                    continue
                 if sc.label.upper() == "BUOY" or cid.lower().startswith("buoy"):
                     contact_id = cid
                     break
