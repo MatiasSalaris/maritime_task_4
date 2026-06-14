@@ -7,6 +7,11 @@
 
   let bubbles = []
   let raf
+  let collapsed = {}   // agent_id -> true when its bubble's CoT is collapsed
+
+  function toggle(id) {
+    collapsed = { ...collapsed, [id]: !collapsed[id] }
+  }
 
   // How many recent thoughts to show in the floating bubble (the side-panel
   // AgentCard shows the full, scrollable chain).
@@ -37,22 +42,29 @@
 
 {#each bubbles as { agent, x, y, thoughts, tag } (agent.id)}
   {@const color = agentColor(agent.id)}
-  <div class="bubble" style="left:{x}px; top:{y - 26}px; --clr:{color};">
+  <!-- svelte-ignore a11y-click-events-have-key-events a11y-no-static-element-interactions -->
+  <div class="bubble" class:collapsed={collapsed[agent.id]}
+       style="left:{x}px; top:{y - 26}px; --clr:{color};"
+       on:click={() => toggle(agent.id)}
+       title={collapsed[agent.id] ? 'Click to expand reasoning' : 'Click to collapse reasoning'}>
     <div class="bhead">
+      <span class="caret">{collapsed[agent.id] ? '▸' : '▾'}</span>
       <span class="bname">{agent.name}</span>
       <span class="btag" style="--t:{tag.color}">{tag.label}</span>
     </div>
 
-    {#if agent.current_task}
-      <div class="btask">{agent.current_task}</div>
-    {/if}
+    {#if !collapsed[agent.id]}
+      {#if agent.current_task}
+        <div class="btask">{agent.current_task}</div>
+      {/if}
 
-    {#if thoughts.length}
-      <div class="cot">
-        {#each thoughts as line, i}
-          <div class="cot-line" class:latest={i === thoughts.length - 1}>{line}</div>
-        {/each}
-      </div>
+      {#if thoughts.length}
+        <div class="cot">
+          {#each thoughts as line, i}
+            <div class="cot-line" class:latest={i === thoughts.length - 1}>{line}</div>
+          {/each}
+        </div>
+      {/if}
     {/if}
 
     <div class="tail"></div>
@@ -69,19 +81,28 @@
     border: 1px solid var(--clr, #00d4ff);
     border-radius: 8px;
     padding: 7px 10px 9px;
-    pointer-events: none;
+    pointer-events: auto;
+    cursor: pointer;
     z-index: 30;
     backdrop-filter: blur(5px);
     box-shadow: 0 0 16px var(--clr, #00d4ff)33;
   }
 
+  .bubble.collapsed { min-width: 0; }
+
   .bhead {
     display: flex;
     align-items: center;
-    justify-content: space-between;
-    gap: 8px;
+    gap: 6px;
     margin-bottom: 5px;
   }
+  .caret {
+    color: var(--clr, #00d4ff);
+    font-size: 11px;
+    line-height: 1;
+    flex-shrink: 0;
+  }
+  .bname { flex: 1; }
   .bname {
     font-family: monospace;
     font-size: 12px;

@@ -2,6 +2,7 @@ from __future__ import annotations
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 from engine import app_state
+from engine.connection_manager import manager
 from engine.message_bus import message_bus
 
 router = APIRouter()
@@ -18,6 +19,7 @@ class AgentStatusPayload(BaseModel):
 @router.post("/mission")
 async def set_mission(body: MissionPayload) -> dict:
     await app_state.engine.provider.set_mission(body.text)
+    app_state.engine.paused = False  # a new order resumes a paused (post-reset) world
     return {"ok": True, "mission": body.text}
 
 
@@ -25,7 +27,20 @@ async def set_mission(body: MissionPayload) -> dict:
 async def change_mission(body: MissionPayload) -> dict:
     """Mid-mission intent change — same as set_mission but semantically distinct."""
     await app_state.engine.provider.set_mission(body.text)
+    app_state.engine.paused = False
     return {"ok": True, "mission": body.text}
+
+
+class SpeedPayload(BaseModel):
+    scale: float  # sim-time multiplier, e.g. 0.5, 1, 2, 4
+
+
+@router.post("/speed")
+async def set_speed(body: SpeedPayload) -> dict:
+    """Set the simulation speed multiplier (clamped to a sane range)."""
+    scale = max(0.25, min(8.0, body.scale))
+    app_state.engine.time_scale = scale
+    return {"ok": True, "scale": scale}
 
 
 @router.get("/state")
@@ -61,10 +76,16 @@ async def set_aor(body: AORPayload) -> dict:
 
 @router.post("/reset")
 async def reset_sim() -> dict:
-    """Clear all path history, CoT, tasks, mission, and message log. Call before each demo run."""
+    """Full wipe — back to a just-booted state. Resets the world (spawn poses,
+    contacts, mission, CoT), clears the message bus, freezes the engine, and
+    tells every AI agent to wipe its in-memory state (mission, shared picture,
+    active task, outbox) so nothing from the previous run lingers."""
+    app_state.engine.paused = True
+    for agent_id in manager.connected_agent_ids():
+        await manager.send_to_agent(agent_id, {"type": "reset"})
     await app_state.engine.provider.reset()
     message_bus.clear()
-    return {"ok": True}
+    return {"ok": True, "paused": True}
 
 
 @router.post("/agents/{agent_id}/status")

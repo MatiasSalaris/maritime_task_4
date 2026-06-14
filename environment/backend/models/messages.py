@@ -5,6 +5,7 @@ from pydantic import BaseModel
 
 
 class MessageType(str, Enum):
+    INTENT = "intent"           # lead asset re-expresses the human's order for the team
     PROPOSAL = "proposal"
     ACK = "ack"
     OBJECTION = "objection"

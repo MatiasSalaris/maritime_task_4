@@ -15,6 +15,7 @@
   import OverlayPicker            from './ui/OverlayPicker.svelte'
   import ThoughtBubbles           from './ui/ThoughtBubbles.svelte'
   import MapTools                 from './ui/MapTools.svelte'
+  import SpeedControls            from './ui/SpeedControls.svelte'
   import { selectedAgentId }      from './store/worldStore.js'
 
   const AGENT_IDS = ['agent_0', 'agent_1', 'agent_2']
@@ -206,6 +207,11 @@
     />
   </div>
 
+  <!-- Speed controls — bottom-right -->
+  <div class="speed-widget">
+    <SpeedControls />
+  </div>
+
   <!-- Thought bubbles -->
   {#if ready}
     <div class="bubbles-layer">
@@ -243,6 +249,13 @@
     position: absolute;
     top: 14px;
     left: 14px;
+    z-index: 20;
+  }
+
+  .speed-widget {
+    position: absolute;
+    bottom: 14px;
+    right: 14px;
     z-index: 20;
   }
 

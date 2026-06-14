@@ -6,13 +6,16 @@ Usage (world model must be running, e.g. via environment/docker-compose):
     python -m maritime_swarm.ai_control
 
 Environment variables:
-    GROQ_API_KEY / API_KEY   LLM key (omit to run the offline heuristic planner)
-    GROQ_MODEL               model name (default llama-3.1-8b-instant)
+    GROQ_API_KEY / API_KEY   primary LLM key (open-weight model on Groq)
+    GROQ_MODEL               Groq model name (default llama-3.1-8b-instant)
+    OPENAI_API_KEY           failover LLM key, used when Groq is rate-limited/down
+    OPENAI_MODEL             OpenAI model name (default gpt-4o-mini)
     WORLD_HTTP_URL           default http://localhost:8000
     WORLD_WS_URL             default ws://localhost:8000
     MISSION                  override the default patrol mission text
-    THINK_INTERVAL           min seconds between LLM calls per agent (default 4)
-    FAKE_LLM                 set to 1 to force the heuristic planner
+
+At least one of GROQ_API_KEY / OPENAI_API_KEY is REQUIRED — there is no offline
+mode: every agent must be driven by its own LLM.
 """
 
 from __future__ import annotations
@@ -46,13 +49,18 @@ def main() -> None:
     # No MISSION env → adopt whatever mission is set in the world (e.g. typed
     # in the frontend); the controller falls back to the default if none.
     mission = _clean(os.getenv("MISSION")) or None
-    force_fake = _clean(os.getenv("FAKE_LLM"), "0").lower() in ("1", "true", "yes")
     # Strip surrounding quotes/whitespace: Docker Compose env_file passes values
     # literally (a quoted .env value would otherwise carry the quotes through).
-    api_key = _clean(os.getenv("GROQ_API_KEY") or os.getenv("API_KEY")) or None
-    model = _clean(os.getenv("GROQ_MODEL")) or _DEFAULT_MODEL
+    groq_key = _clean(os.getenv("GROQ_API_KEY") or os.getenv("API_KEY")) or None
+    groq_model = _clean(os.getenv("GROQ_MODEL")) or _DEFAULT_MODEL
+    openai_key = _clean(os.getenv("OPENAI_API_KEY")) or None
+    openai_model = _clean(os.getenv("OPENAI_MODEL")) or "gpt-4o-mini"
 
-    decider = build_decider(api_key, model, force_fake=force_fake)
+    try:
+        decider = build_decider(groq_key, groq_model, openai_key, openai_model)
+    except RuntimeError as exc:
+        logging.error("%s", exc)
+        return
 
     try:
         asyncio.run(run_swarm(http_url, ws_url, mission, decider))

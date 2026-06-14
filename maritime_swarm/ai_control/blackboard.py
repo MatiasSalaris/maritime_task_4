@@ -59,6 +59,12 @@ class SwarmView:
         self.contacts: dict[str, SharedContact] = {}
         self.messages: list[Msg] = []
         self.now: float = 0.0
+        # The most recent mission intent briefed by the lead asset. Kept
+        # separately (not just in the rolling message buffer) so a peer's
+        # working intent survives chatter — this is how a peer learns the
+        # mission without ever seeing the human's raw order.
+        self.briefed_intent: str | None = None
+        self.briefed_intent_t: float = 0.0
 
     def tick(self, world_time: float) -> None:
         self.now = world_time
@@ -77,10 +83,13 @@ class SwarmView:
         if msg_type == "status":
             self._ingest_status(from_agent, content)
         else:
-            text = (reasoning or content.get("text") or "").strip()
+            text = (content.get("text") or reasoning or "").strip()
             if text:
                 self.messages.append(Msg(from_agent, msg_type, text, self.now))
                 self.messages = self.messages[-_MAX_MESSAGES:]
+                if msg_type == "intent":
+                    self.briefed_intent = text
+                    self.briefed_intent_t = self.now
         for c in content.get("contacts", []) or []:
             self._merge_contact(from_agent, c)
 

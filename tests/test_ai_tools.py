@@ -20,7 +20,7 @@ from maritime_swarm.ai_control.navigation_tools import (
     default_registry,
 )
 from maritime_swarm.ai_control.observation import Observation, SensedContact
-from maritime_swarm.ai_control.planner import HeuristicDecider, normalise_decision
+from maritime_swarm.ai_control.planner import normalise_decision
 from maritime_swarm.ai_control.scene import POI, Scene
 from maritime_swarm.ai_control.tools import Bounds, ToolContext, ToolError, ToolStatus
 
@@ -149,16 +149,6 @@ def test_normalise_decision_shapes_output():
     assert d["tool"] == "move" and d["args"] == {"direction": "south"}
     assert len(d["messages"]) == 1                     # empty-content msg dropped
     assert d["messages"][0]["type"] == "status"        # unknown type coerced
-
-
-def test_heuristic_decider_runs():
-    dec = HeuristicDecider()
-    reg = default_registry()
-    out = dec.decide(make_obs(37.5, 15.1, []), make_ctx(), SCENE, "patrol the area", [], [], [], None, reg)
-    assert out["tool"] == "patrol_sector"
-    c = SensedContact(id="c003", lat=37.5, lon=15.1, flagged=True)
-    out2 = dec.decide(make_obs(37.5, 15.1, [c]), make_ctx(), SCENE, "patrol", [], [], [], None, reg)
-    assert out2["tool"] == "investigate_contact"
 
 
 def test_registry_has_full_toolset():

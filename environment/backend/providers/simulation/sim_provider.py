@@ -101,6 +101,12 @@ class SimulatedPlatformProvider(AbstractPlatformProvider):
             for c in self.contacts
             if distance_km(agent.position, c.position) <= agent.sensor_range_km
         ]
+        # The human's order goes ONLY to the lead asset (the entry point, by
+        # convention the lowest-id agent). Peers receive no mission text — they
+        # learn the working intent from the lead's peer-to-peer briefing. This is
+        # the "natural-language mission interface to the leader, propagated to the
+        # peers" model: no agent but the lead ever sees the raw order.
+        mission = self.mission if agent_id == self._leader_id() else None
         return Observation(
             agent_id=agent_id,
             position=agent.position,
@@ -109,8 +115,12 @@ class SimulatedPlatformProvider(AbstractPlatformProvider):
             contacts_in_range=visible,
             messages_inbox=[m.model_dump() for m in inbox],
             world_time=self.world_time,
-            mission=self.mission,
+            mission=mission,
         )
+
+    def _leader_id(self) -> str | None:
+        """The entry-point asset that receives the human's order (lowest id)."""
+        return min((a.id for a in self.agents), default=None)
 
     async def apply_action(self, agent_id: str, action: dict) -> None:
         agent = self._agent(agent_id)

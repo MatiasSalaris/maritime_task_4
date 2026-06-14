@@ -9,6 +9,7 @@
   })
 
   const TYPE_ICON = {
+    intent:   '✦',
     proposal: '◆',
     ack:      '✓',
     objection:'✕',
@@ -17,6 +18,7 @@
     report:   '⚑',
   }
   const TYPE_COLOR = {
+    intent:   '#ffd24a',
     proposal: '#00d4ff',
     ack:      '#00ff88',
     objection:'#ff3355',
@@ -25,9 +27,12 @@
     report:   '#ff8800',
   }
 
-  // Coordination + reports on the log; high-frequency 'status' heartbeats stay
-  // off it (they still animate as packets on the map).
-  $: visibleLog = ($worldState.message_log ?? []).filter(m => m.msg_type !== 'status')
+  // Full inspectability: the coordination flow (intent / proposal / ack /
+  // objection / handoff / report) is shown by default; the high-frequency
+  // 'status' heartbeats are hidden unless the operator opts in, so the
+  // negotiation stays legible but nothing is uninspectable.
+  let showStatus = false
+  $: visibleLog = ($worldState.message_log ?? []).filter(m => showStatus || m.msg_type !== 'status')
 
   function agentName(id) {
     const a = $worldState.agents?.find(a => a.id === id)
@@ -42,7 +47,13 @@
 </script>
 
 <div class="log-section">
-  <div class="title">MESSAGE LOG</div>
+  <div class="title">
+    <span>MESSAGE LOG</span>
+    <label class="status-toggle">
+      <input type="checkbox" bind:checked={showStatus} />
+      status
+    </label>
+  </div>
   <div class="log" bind:this={el}>
     {#each visibleLog as msg (msg.id)}
       <div class="entry">
@@ -79,7 +90,21 @@
     color: #4a7a9a;
     padding: 0 14px 7px 14px;
     flex-shrink: 0;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
   }
+  .status-toggle {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    font-size: 10px;
+    letter-spacing: 0.06em;
+    color: #3a6a8a;
+    cursor: pointer;
+    text-transform: lowercase;
+  }
+  .status-toggle input { accent-color: #00d4ff; cursor: pointer; }
   .log {
     flex: 1;
     overflow-y: auto;

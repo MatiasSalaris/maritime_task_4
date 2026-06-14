@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import os
 import time
 from typing import Any
 
@@ -20,12 +21,18 @@ import requests
 
 from maritime_swarm.ai_control.brain import AgentBrain
 from maritime_swarm.ai_control.navigation_tools import default_registry
-from maritime_swarm.ai_control.planner import AgentDecider, GroqDecider, HeuristicDecider
+from maritime_swarm.ai_control.planner import AgentDecider, LLMDecider, LLMProvider
+from maritime_swarm.ai_control.rate_limit import LLMGate
 from maritime_swarm.ai_control.scene import Scene
 from maritime_swarm.ai_control.tools import ToolContext
 from maritime_swarm.ai_control.world_client import WorldModelClient
 
 logger = logging.getLogger(__name__)
+
+# Inter-call spacing for the swarm-wide LLM gate. With three agents sharing a
+# ~6000 TPM free-tier budget, serialising + spacing calls keeps the rate under
+# the cap (and the live reasoning legible — one asset thinks at a time).
+_LLM_SPACING_S = float(os.getenv("LLM_MIN_SPACING_S", "3.0"))
 
 DEFAULT_MISSION = (
     "PATROL ORDER: Maintain persistent surveillance of the assigned operating area in the "
@@ -96,9 +103,15 @@ async def run_swarm(
     registry = default_registry()
 
     agents = state.get("agents", [])
+    # The entry-point / lead asset is the lowest-id agent. It alone receives the
+    # human's order; it interprets and briefs the peers (no central commander —
+    # it proposes, it does not command). The backend applies the same rule when
+    # deciding whose observation carries the mission text.
+    leader_id = min((a["id"] for a in agents), default=None)
+    gate = LLMGate(min_spacing_s=_LLM_SPACING_S)
     logger.info(
-        "Controlling %d agents | decider=%s | area lat %.3f..%.3f lon %.3f..%.3f",
-        len(agents), type(decider).__name__,
+        "Controlling %d agents | decider=%s | lead=%s | LLM spacing=%.1fs | area lat %.3f..%.3f lon %.3f..%.3f",
+        len(agents), type(decider).__name__, leader_id, _LLM_SPACING_S,
         scene.bounds.lat_min, scene.bounds.lat_max, scene.bounds.lon_min, scene.bounds.lon_max,
     )
 
@@ -116,18 +129,42 @@ async def run_swarm(
             bounds=scene.bounds,
         )
         client = WorldModelClient(ws_url, a["id"])
-        brains.append(AgentBrain(client, ctx, decider, scene, mission, registry))
+        brains.append(AgentBrain(
+            client, ctx, decider, scene, mission, registry,
+            is_leader=(a["id"] == leader_id), gate=gate))
 
     await asyncio.gather(*(b.run() for b in brains))
 
 
-def build_decider(api_key: str | None, model: str, force_fake: bool = False) -> AgentDecider:
-    """The real LLM decider when a key is available, else the offline fallback."""
-    if api_key and not force_fake:
-        logger.info("Using GroqDecider (real LLM, model=%s)", model)
-        return GroqDecider(api_key=api_key, model=model)
-    logger.warning(
-        "No API key (or FAKE_LLM set) — using the offline HeuristicDecider. "
-        "Set GROQ_API_KEY for real open-ended LLM coordination."
-    )
-    return HeuristicDecider()
+# OpenAI-compatible endpoints. The Groq base URL honours LLM_BASE_URL /
+# GROQ_BASE_URL (so a local Ollama/LM Studio works too); OpenAI is the failover.
+_GROQ_BASE_URL = (os.getenv("LLM_BASE_URL") or os.getenv("GROQ_BASE_URL")
+                  or "https://api.groq.com/openai/v1")
+_OPENAI_BASE_URL = os.getenv("OPENAI_BASE_URL") or "https://api.openai.com/v1"
+
+
+def build_decider(
+    groq_api_key: str | None, groq_model: str,
+    openai_api_key: str | None = None, openai_model: str = "gpt-4o-mini",
+) -> AgentDecider:
+    """A pure-LLM decider over the available providers (Groq first, OpenAI failover).
+
+    There is NO offline/heuristic mode — every agent must be driven by an LLM.
+    Raises if no provider key is configured.
+    """
+    providers: list[LLMProvider] = []
+    if groq_api_key:
+        providers.append(LLMProvider(
+            name="groq", api_key=groq_api_key, model=groq_model, base_url=_GROQ_BASE_URL))
+    if openai_api_key:
+        providers.append(LLMProvider(
+            name="openai", api_key=openai_api_key, model=openai_model, base_url=_OPENAI_BASE_URL))
+    if not providers:
+        raise RuntimeError(
+            "No LLM API key set. Export GROQ_API_KEY (preferred, open-weight) and/or "
+            "OPENAI_API_KEY for failover. The swarm requires a live LLM — there is no "
+            "offline mode."
+        )
+    logger.info("LLM providers (in failover order): %s",
+                ", ".join(f"{p.name}:{p.model}" for p in providers))
+    return LLMDecider(providers)

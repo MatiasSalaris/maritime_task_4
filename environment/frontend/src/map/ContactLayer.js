@@ -92,9 +92,9 @@ export class ContactLayer {
       paint: {
         'circle-radius': ['case', ['get', 'flagged'], 7, 5],
         'circle-color': COLOR_BY_LABEL,
-        'circle-opacity': 1.0,
+        'circle-opacity': ['case', ['get', 'stale'], 0.55, 1.0],
         'circle-stroke-color': '#ffffff',
-        'circle-stroke-width': 1.6,
+        'circle-stroke-width': ['case', ['get', 'stale'], 0.8, 1.6],
       },
     })
 
@@ -259,33 +259,46 @@ export class ContactLayer {
     const god    = []
 
     for (const c of this._contacts) {
-      const detected = agents.some(a =>
-        haversineKm(a.lat, a.lon, c.position.lat, c.position.lon) <= (a.range ?? 4.0)
-      )
+      // Trust the backend's authoritative detection first (it sets
+      // detecting_agents / status from the same sensor model), then fall back
+      // to a client-side range check. This removes any client/server mismatch
+      // that previously left a genuinely-detected contact invisible.
+      const detected =
+        (Array.isArray(c.detecting_agents) && c.detecting_agents.length > 0) ||
+        c.status === 'active' ||
+        agents.some(a =>
+          haversineKm(a.lat, a.lon, c.position.lat, c.position.lon) <= (a.range ?? 4.0)
+        )
 
       let track = this._tracks.get(c.id)
 
-      if (detected) {
-        if (!track) {
-          // NEW detection → assign NATO id + fire red ping
-          track = {
-            natoId: this._assignNato(c),
-            firstSeen: now,
-            lastSeen: now,
-            lastPos: { lon: c.position.lon, lat: c.position.lat },
-          }
-          this._tracks.set(c.id, track)
-          this._animCanvas?.addPing({ lon: c.position.lon, lat: c.position.lat }, '#ff3344')
+      if (detected && !track) {
+        // NEW detection → assign NATO id + fire red ping
+        track = {
+          natoId: this._assignNato(c),
+          firstSeen: now,
+          lastSeen: now,
+          lastPos: { lon: c.position.lon, lat: c.position.lat },
         }
+        this._tracks.set(c.id, track)
+        this._animCanvas?.addPing({ lon: c.position.lon, lat: c.position.lat }, '#ff3344')
+      }
+      if (detected) {
         track.lastSeen = now
         track.lastPos  = { lon: c.position.lon, lat: c.position.lat }
+      }
 
+      if (detected || track) {
+        // Once detected, a contact STAYS on screen: live at its true position
+        // while in range, otherwise held at its last known position. (It no
+        // longer vanishes the moment it leaves a sensor ring.)
+        const pos = detected ? c.position : track.lastPos
         active.push({
           type: 'Feature',
-          geometry: { type: 'Point', coordinates: [c.position.lon, c.position.lat] },
+          geometry: { type: 'Point', coordinates: [pos.lon, pos.lat] },
           properties: {
             id: c.id, label: c.label, flagged: !!c.flagged,
-            nato_id: track.natoId,
+            nato_id: track.natoId, stale: !detected,
           },
         })
       } else if (godView) {
