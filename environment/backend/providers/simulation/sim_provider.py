@@ -169,6 +169,9 @@ class SimulatedPlatformProvider(AbstractPlatformProvider):
         self.mission = mission
         self.mission_status = "active" if mission.strip() else "idle"
         self.mission_result = None
+        for agent in self.agents:
+            agent.cot_text = ""
+            agent.decision_log = []
 
     async def complete_mission(self, result: dict) -> None:
         self.mission_status = "completed"
@@ -198,6 +201,7 @@ class SimulatedPlatformProvider(AbstractPlatformProvider):
             agent.connected = connected
             if not connected:
                 agent.cot_text = ""
+                agent.decision_log = []
 
     async def reset(self) -> None:
         # Restart from scratch: return every agent to its spawn pose and stop it,
@@ -214,6 +218,7 @@ class SimulatedPlatformProvider(AbstractPlatformProvider):
             agent.path_history = []
             agent.planned_path = []
             agent.cot_text = ''
+            agent.decision_log = []
             agent.current_task = None
         self.contacts = initial_contacts()
         self.mission = None
@@ -226,6 +231,10 @@ class SimulatedPlatformProvider(AbstractPlatformProvider):
     async def update_agent_cot(self, agent_id: str, chunk: str) -> None:
         agent = self._agent(agent_id)
         if agent:
+            text = chunk.strip()
+            if text:
+                agent.decision_log.append({"sent_at": time.time(), "text": text})
+                agent.decision_log = agent.decision_log[-80:]
             agent.cot_text += chunk
             # Keep a rolling window of recent chain-of-thought (newline-separated
             # thoughts). Trim from the front on a line boundary so the oldest

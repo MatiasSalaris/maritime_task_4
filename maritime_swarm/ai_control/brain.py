@@ -313,12 +313,12 @@ class AgentBrain:
                 peers, shared, messages, self._current_task, self.registry,
                 task_status, silent, list(self._outbox))
 
+            reasoning = d.get("reasoning") or ""
             for m in d["messages"]:
-                await self.client.send_p2p(m["to"], m["type"], {"text": m["content"]}, reasoning=m["content"])
+                await self.client.send_p2p(m["to"], m["type"], {"text": m["content"]}, reasoning=reasoning)
                 self._outbox.append(m)
                 self._outbox = self._outbox[-5:]
 
-            reasoning = d.get("reasoning") or ""
             if reasoning:
                 await self.client.send_cot(reasoning + "\n")
 

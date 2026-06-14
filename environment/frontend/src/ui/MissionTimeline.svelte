@@ -24,6 +24,14 @@
     return (text ?? '').replace(/\s+/g, ' ').trim()
   }
 
+  function messageText(m) {
+    return clean(m.content?.text || '')
+  }
+
+  function reasoningText(m) {
+    return clean(m.reasoning || '')
+  }
+
   function priorityFromMission(mission) {
     const text = (mission ?? '').toLowerCase()
     if (text.includes('veloc') || text.includes('speed') || text.includes('rapida')) return 'velocità'
@@ -38,13 +46,21 @@
     return 'area assegnata'
   }
 
+  function readableReasoning(text, agentId) {
+    return clean(text)
+      .replaceAll('AUTO', laneName(agentId))
+      .replace(/fascia automatica dell.?AOR/gi, laneName(agentId))
+      .replace(/fascia automatica/gi, laneName(agentId))
+      .replace(/\bAOR\b/g, 'area operativa')
+  }
+
   function isSearchProposal(m) {
-    const text = clean(m.reasoning || m.content?.text || '').toLowerCase()
+    const text = clean(`${messageText(m)} ${reasoningText(m)}`).toLowerCase()
     return m.msg_type === 'proposal' && (text.includes('ricerca') || text.includes('boa') || text.includes('auto'))
   }
 
   function isSearchAck(m) {
-    const text = clean(m.reasoning || m.content?.text || '').toLowerCase()
+    const text = clean(`${messageText(m)} ${reasoningText(m)}`).toLowerCase()
     return m.msg_type === 'ack' && (text.includes('continuo') || text.includes('confermo') || text.includes('ricerca'))
   }
 
@@ -77,7 +93,7 @@
       type: m.msg_type,
       title: `${agentName(m.from_agent)} segnala il risultato`,
       body: explainMessage(m),
-      detail: clean(m.reasoning || m.content?.text || ''),
+      detail: reasoningText(m),
     })),
     ...rawMessages
       .filter(m => !isSearchProposal(m) && !isSearchAck(m) && m.msg_type !== 'report')
@@ -89,7 +105,7 @@
         type: m.msg_type,
         title: `${agentName(m.from_agent)} -> ${agentName(m.to_agent)} · ${TYPE_LABEL[m.msg_type] ?? m.msg_type}`,
         body: explainMessage(m),
-        detail: clean(m.reasoning || m.content?.text || ''),
+        detail: reasoningText(m),
       })),
   ].filter(Boolean)
 
@@ -108,6 +124,16 @@
     } : null,
   ].filter(Boolean)
 
+  $: reasoningEvents = ($worldState.agents ?? [])
+    .flatMap(a => (a.decision_log ?? []).map(entry => ({
+      kind: 'reasoning',
+      t: entry.sent_at ?? 0,
+      from: a.id,
+      title: `${a.name} · ragionamento`,
+      body: readableReasoning(entry.text, a.id),
+    })))
+    .filter(e => e.body)
+
   $: taskEvents = ($worldState.agents ?? [])
     .filter(a => a.current_task)
     .map(a => ({
@@ -118,9 +144,9 @@
       body: humanTask(a.current_task, a.id),
     }))
 
-  $: events = [...missionEvents, ...messages, ...taskEvents]
+  $: events = [...missionEvents, ...reasoningEvents, ...messages, ...taskEvents]
     .sort((a, b) => a.t - b.t)
-    .slice(-32)
+    .slice(-48)
 
   function resultText(result) {
     if (!result) return ''
@@ -141,8 +167,8 @@
   }
 
   function explainMessage(m) {
-    const text = clean(m.reasoning || m.content?.text || '')
-    const lower = text.toLowerCase()
+    const text = messageText(m) || reasoningText(m)
+    const lower = clean(`${messageText(m)} ${reasoningText(m)}`).toLowerCase()
     if (m.msg_type === 'report' && (lower.includes('boa') || lower.includes('buoy'))) {
       return 'La boa è stata rilevata. La ricerca può terminare.'
     }
@@ -164,7 +190,8 @@
   function exportTxt() {
     const lines = events.map((e, i) => {
       const head = `${String(i + 1).padStart(2, '0')} ${ts(e.t)} ${e.title}`
-      const detail = e.detail && e.detail !== e.body ? `\n   dettaglio: ${e.detail}` : ''
+      const label = ['reasoning', 'message', 'report'].includes(e.kind) ? 'perché' : 'dettaglio'
+      const detail = e.detail && e.detail !== e.body ? `\n   ${label}: ${e.detail}` : ''
       return `${head}\n   ${e.body || '-'}${detail}`
     })
     download('missione-timeline.txt', 'text/plain;charset=utf-8', lines.join('\n\n'))
@@ -219,7 +246,7 @@
           <div class="body">{e.body || '-'}</div>
           {#if e.detail && e.detail !== e.body}
             <details>
-              <summary>messaggio originale</summary>
+              <summary>{['message', 'report'].includes(e.kind) ? 'perché' : 'dettaglio'}</summary>
               <div class="detail">{e.detail}</div>
             </details>
           {/if}

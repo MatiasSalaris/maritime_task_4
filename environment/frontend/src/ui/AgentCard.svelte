@@ -48,6 +48,10 @@
 
   function fmt(n) { return n?.toFixed(1) ?? '—' }
 
+  function clean(text) {
+    return (text ?? '').replace(/\s+/g, ' ').trim()
+  }
+
   async function forceStatus(status) {
     await fetch(`/api/agents/${agent.id}/status`, {
       method: 'POST',
@@ -121,7 +125,10 @@
               <span class="cicon" style="color:{MSG_COLOR[m.msg_type] ?? '#888'}">{MSG_ICON[m.msg_type] ?? '?'}</span>
               <span class="cpeer">{m.from_agent === agent.id ? agentName(m.to_agent) : agentName(m.from_agent)}</span>
               <span class="ctype" style="color:{MSG_COLOR[m.msg_type] ?? '#888'}">{MSG_LABEL[m.msg_type] ?? m.msg_type}</span>
-              {#if m.reasoning}<div class="ctext">{m.reasoning}</div>{/if}
+              {#if m.content?.text}<div class="ctext">{m.content.text}</div>{/if}
+              {#if m.reasoning && clean(m.reasoning) !== clean(m.content?.text)}
+                <div class="ctext why"><span>Perché</span>{m.reasoning}</div>
+              {/if}
             </div>
           {/each}
         </div>
@@ -242,8 +249,17 @@
   .cicon { margin: 0 4px; }
   .cpeer { color: #c8d8e8; font-weight: bold; }
   .ctype { color: #6a8a9a; margin-left: 5px; }
-  .ctext { color: #9fc0d0; padding: 1px 0 2px 10px; border-left: 2px solid #15303f; margin-top: 2px;
+  .ctext { color: #b8dcec; padding: 1px 0 2px 10px; border-left: 2px solid #15303f; margin-top: 2px;
            white-space: pre-wrap; overflow-wrap: anywhere; }
+  .ctext.why { color: #6a9ab0; border-left-color: #315b76; }
+  .ctext.why span {
+    display: block;
+    color: #3a6a8a;
+    font-size: 9px;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    margin-bottom: 1px;
+  }
   .comms-empty { font-size: 11px; color: #3a5a7a; }
 
   .details {

@@ -60,7 +60,7 @@ export function agentDecisionSummary(agent, messages = [], options = {}) {
     .slice(-3)
 
   const lastMsg = ownMsgs.at(-1)
-  const lastMsgText = lastMsg?.reasoning || lastMsg?.content?.text || ''
+  const lastMsgText = lastMsg?.content?.text || lastMsg?.reasoning || ''
   return {
     decision: cleanTask(agent?.current_task, compact),
     why: compactReason(latest, compact) || 'Nessun ragionamento ricevuto.',

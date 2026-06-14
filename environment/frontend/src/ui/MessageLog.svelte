@@ -49,6 +49,10 @@
     return d.toTimeString().slice(0, 8)
   }
 
+  function clean(text) {
+    return (text ?? '').replace(/\s+/g, ' ').trim()
+  }
+
 </script>
 
 <div class="log-section">
@@ -65,8 +69,11 @@
         <span class="to"   style="color:{agentColor(msg.to_agent)}">{agentName(msg.to_agent)}</span>
         <span class="type" style="color:{TYPE_COLOR[msg.msg_type] ?? '#888'}">{TYPE_LABEL[msg.msg_type] ?? msg.msg_type}</span>
       </div>
-      {#if msg.reasoning}
-        <div class="reasoning">{msg.reasoning}</div>
+      {#if msg.content?.text}
+        <div class="message-text">{msg.content.text}</div>
+      {/if}
+      {#if msg.reasoning && clean(msg.reasoning) !== clean(msg.content?.text)}
+        <div class="reasoning"><span>Perché</span>{msg.reasoning}</div>
       {/if}
     {/each}
     {#if !visibleLog.length}
@@ -111,17 +118,32 @@
   .from, .to { font-weight: bold; }
   .arrow  { color: #3a5a7a; }
   .type   { font-size: 10px; letter-spacing: 0.05em; margin-left: auto; }
+  .message-text,
   .reasoning {
     font-size: 11px;
-    color: #6a9ab0;
     font-family: monospace;
     padding: 3px 8px 5px 8px;
-    line-height: 1.45;
-    border-left: 2px solid #1a3a5a;
     margin-left: 14px;
     margin-bottom: 2px;
     white-space: pre-wrap;
     overflow-wrap: anywhere;
+    line-height: 1.45;
+  }
+  .message-text {
+    color: #b8dcec;
+    border-left: 2px solid #1a3a5a;
+  }
+  .reasoning {
+    color: #6a9ab0;
+    border-left: 2px solid #315b76;
+  }
+  .reasoning span {
+    display: block;
+    color: #3a6a8a;
+    font-size: 9px;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    margin-bottom: 2px;
   }
   .empty { font-size: 13px; color: #3a5a7a; text-align: center; padding: 24px; }
 </style>

@@ -62,6 +62,13 @@ export function createClient() {
         if (agent) {
           agent.cot_text = (agent.cot_text ?? '') + chunk
           if (agent.cot_text.length > 2000) agent.cot_text = agent.cot_text.slice(-2000)
+          const text = (chunk ?? '').trim()
+          if (text) {
+            agent.decision_log = [
+              ...(agent.decision_log ?? []),
+              { sent_at: Date.now() / 1000, text },
+            ].slice(-80)
+          }
         }
         return { ...s }
       })
