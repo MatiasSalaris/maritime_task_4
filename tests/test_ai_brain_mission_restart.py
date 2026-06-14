@@ -59,6 +59,22 @@ def make_brain(client: FakeClient) -> AgentBrain:
     return brain
 
 
+def make_entry_aware_brain(client: FakeClient, agent_id: str, entry_agent_id: str = "agent_0") -> AgentBrain:
+    bounds = Bounds(lat_min=37.42, lat_max=37.60, lon_min=15.00, lon_max=15.28)
+    scene = Scene(bounds=bounds)
+    ctx = ToolContext(
+        agent_id=agent_id,
+        agent_name=agent_id,
+        agent_type="USV",
+        cruise_speed_kn=28.0,
+        bounds=bounds,
+        scene=scene,
+    )
+    brain = AgentBrain(client, ctx, FakeDecider(), scene, None, ToolRegistry(), entry_agent_id=entry_agent_id)
+    brain._cooldown_until = time.monotonic() + 999.0
+    return brain
+
+
 @pytest.fixture
 def anyio_backend() -> str:
     return "asyncio"
@@ -104,7 +120,8 @@ async def test_new_mission_after_buoy_completion_does_not_reuse_stale_buoy() -> 
     await asyncio.sleep(0)
 
     assert brain.mission == "Patrol the south sector"
-    assert brain._current_task == "Ricalcolo missione"
+    assert brain._current_task == "Deliberazione aperta: mission"
+    assert brain._deliberation is not None
     assert brain.view.contacts == {}
     assert client.mission_completions == []
 
@@ -147,6 +164,54 @@ async def test_same_mission_text_can_be_reactivated_after_completion() -> None:
     await asyncio.sleep(0)
 
     assert brain.mission == "Find the missing buoy"
-    assert brain._current_task == "Ricalcolo missione"
+    assert brain._current_task == "Deliberazione aperta: mission"
     assert brain._mission_complete_contact is None
+    assert brain._deliberation is not None
     assert brain.view.contacts == {}
+
+
+@pytest.mark.anyio
+async def test_entry_agent_broadcasts_raw_mission_to_peers() -> None:
+    client = FakeClient()
+    brain = make_entry_aware_brain(client, "agent_0")
+
+    await brain._on_observation(Observation(
+        agent_id="agent_0",
+        lat=37.50,
+        lon=15.10,
+        heading=0.0,
+        speed_kn=0.0,
+        world_time=30.0,
+        mission="Find the missing buoy",
+        mission_status="active",
+    ))
+    await asyncio.sleep(0)
+
+    briefing = next(msg for msg in client.p2p if msg["content"].get("kind") == "mission_briefing")
+    assert briefing["content"]["mission"] == "Find the missing buoy"
+
+
+@pytest.mark.anyio
+async def test_peer_uses_mission_briefing_when_backend_hides_raw_text() -> None:
+    client = FakeClient()
+    brain = make_entry_aware_brain(client, "agent_1")
+
+    await brain._on_observation(Observation(
+        agent_id="agent_1",
+        lat=37.50,
+        lon=15.10,
+        heading=0.0,
+        speed_kn=0.0,
+        inbox=[{
+            "from_agent": "agent_0",
+            "msg_type": "proposal",
+            "content": {"kind": "mission_briefing", "mission": "Find the missing buoy", "text": "mission"},
+            "reasoning": "briefing",
+        }],
+        world_time=30.0,
+        mission=None,
+        mission_status="active",
+    ))
+
+    assert brain.mission == "Find the missing buoy"
+    assert brain._deliberation is not None

@@ -30,6 +30,9 @@ def build_decision_system_prompt(registry: ToolRegistry) -> str:
         "Don't grab a shared task before agreeing, but act alone on what only you can do. If you and a "
         "peer want the same thing, the LOWER id keeps it and the other takes the complement. Respect "
         "commitments; cover a silent peer. Only use contact/POI ids shown to you — never invent ids.\n\n"
+        "Your tool choice is a proposal first: the runtime will exchange proposals/acks/objections, "
+        "commit after active peers converge, and fall back after a few rounds if needed. Make your "
+        "proposal explicit and explain any objection briefly.\n\n"
         "Write the JSON fields `reasoning` and every message `content` in Italian. Keep tool names, "
         "agent ids, contact ids, sector names and JSON keys unchanged. Peer messages are telegrams: "
         f"each content must be <= {P2P_TEXT_MAX_CHARS} characters, one line, action/sector/reason only.\n\n"
@@ -58,7 +61,7 @@ def build_decision_user_prompt(
 ) -> str:
     """The full state the asset reasons on: per-agent, shared (mission/comms), world."""
     b = scene.bounds
-    L = [f"MISSION INTENT AVAILABLE TO THIS AGENT: {mission}", ""]
+    L = [f"MISSION (verbatim): {mission}", ""]
 
     # ── per-agent state ───────────────────────────────────────────────────
     L.append("YOUR STATE:")
