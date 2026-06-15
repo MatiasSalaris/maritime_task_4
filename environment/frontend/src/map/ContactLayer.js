@@ -20,6 +20,7 @@ const COLOR_BY_LABEL = [
   'AIS_COMMERCIAL', '#4ea0ff',
   'AIS_FISHING',    '#7fe0a0',
   'UNKNOWN',        '#ff5a3c',
+  'BUOY',           '#ffcc33',
   '#ff3355',
 ]
 
@@ -92,9 +93,9 @@ export class ContactLayer {
       paint: {
         'circle-radius': ['case', ['get', 'flagged'], 7, 5],
         'circle-color': COLOR_BY_LABEL,
-        'circle-opacity': ['case', ['get', 'stale'], 0.55, 1.0],
+        'circle-opacity': 0.95,
         'circle-stroke-color': '#ffffff',
-        'circle-stroke-width': ['case', ['get', 'stale'], 0.8, 1.6],
+        'circle-stroke-width': 1.6,
       },
     })
 

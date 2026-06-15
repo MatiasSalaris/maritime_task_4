@@ -27,6 +27,28 @@ class POI:
 class Scene:
     bounds: Bounds
     pois: list[POI] = field(default_factory=list)
+    # The selected operating area as polygon corners (lat, lon). Present when the
+    # operator/scenario has marked an area; lets the agents ground "the area" /
+    # "the perimeter" / "this region" in real geometry instead of guessing.
+    area_corners: list[tuple[float, float]] = field(default_factory=list)
+
+    def set_area_from_aor(self, aor: dict[str, Any] | None) -> None:
+        """Adopt a GeoJSON Polygon as the operating area: store its corners and
+        tighten ``bounds`` to its bounding box (so sectors/coverage follow it)."""
+        try:
+            ring = (aor or {}).get("coordinates", [[]])[0]
+            pts = [(float(lat), float(lon)) for lon, lat in ring]
+        except (TypeError, ValueError, IndexError):
+            pts = []
+        if len(pts) < 3:
+            self.area_corners = []
+            return
+        if pts[0] == pts[-1]:          # drop the closing duplicate vertex
+            pts = pts[:-1]
+        self.area_corners = pts
+        lats, lons = [p[0] for p in pts], [p[1] for p in pts]
+        self.bounds = Bounds(lat_min=min(lats), lat_max=max(lats),
+                             lon_min=min(lons), lon_max=max(lons))
 
     @classmethod
     def from_world_state(cls, state: dict[str, Any]) -> "Scene":
@@ -40,7 +62,9 @@ class Scene:
             )
             for p in state.get("pois", [])
         ]
-        return cls(bounds=bounds, pois=pois)
+        scene = cls(bounds=bounds, pois=pois)
+        scene.set_area_from_aor(state.get("aor"))
+        return scene
 
 
 # Fallback bounds (Strait of Sicily demo area) if no patrol geofence is present.

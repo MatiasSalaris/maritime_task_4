@@ -19,19 +19,28 @@ import time
 from typing import Any
 
 from maritime_swarm.ai_control.blackboard import SwarmView
+from maritime_swarm.ai_control.geo import haversine_km
 from maritime_swarm.ai_control.observation import Observation
 from maritime_swarm.ai_control.planner import AgentDecider
 from maritime_swarm.ai_control.rate_limit import LLMGate
-from maritime_swarm.ai_control.scene import Scene
+from maritime_swarm.ai_control.scene import POI as ScenePOI, Scene
 from maritime_swarm.ai_control.tools import Tool, ToolContext, ToolError, ToolRegistry
 from maritime_swarm.ai_control.world_client import WorldModelClient
 
 logger = logging.getLogger(__name__)
 
 STATUS_INTERVAL_S = 4.0      # world-time between status heartbeats
-DECISION_INTERVAL_S = 10.0   # think at least this often (wall clock)
-MIN_DECISION_INTERVAL_S = 6.0  # never think more often than this
-RATE_LIMIT_COOLDOWN_S = 25.0  # back off this long after an LLM rate-limit (429)
+# Event-driven cadence: we re-think on EVENTS (new contact, peer message, mission
+# change, action finished, idle) — NOT on a fixed timer while an action is still
+# executing. The heartbeat is only a slow safety re-evaluation so a long-running
+# action still gets reconsidered occasionally.
+HEARTBEAT_S = 30.0             # slow fallback re-think while an action runs
+MIN_DECISION_INTERVAL_S = 4.0  # floor: never think more often than this
+RATE_LIMIT_COOLDOWN_S = 25.0   # back off this long after an LLM rate-limit (429)
+# Movement tools — if one of these was the last action but the asset barely moved,
+# the outcome feedback flags it (e.g. a go_to whose target was the current pos).
+_MOVE_TOOLS = {"go_to", "move", "go_to_poi", "patrol_sector",
+               "investigate_contact", "escort_contact", "visit_pois", "rendezvous"}
 _NO_OP_TOOLS = {"", "continue", "none", "keep", "hold_current"}
 
 
@@ -44,7 +53,7 @@ class AgentBrain:
         scene: Scene,
         mission: str | None,
         registry: ToolRegistry,
-        decision_interval: float = DECISION_INTERVAL_S,
+        decision_interval: float = HEARTBEAT_S,
         is_leader: bool = False,
         gate: LLMGate | None = None,
     ) -> None:
@@ -78,6 +87,10 @@ class AgentBrain:
         self._urgent = False         # a fresh contact needs an immediate decision
         self._epoch = 0              # bumped on reset; in-flight decisions from a
                                      # prior epoch are discarded when they return
+        # Persistent self-authored plan + state for outcome feedback.
+        self._plan: str | None = None
+        self._decision_pos: tuple[float, float] | None = None  # pos when we last decided
+        self._last_action_label: str | None = None             # what we last chose
 
     # ── main loop ──────────────────────────────────────────────────────────
     async def run(self) -> None:
@@ -124,11 +137,29 @@ class AgentBrain:
         self._dirty = True
         self._thinking = False
         self._last_status_t = -1e9
+        self._plan = None
+        self._decision_pos = None
+        self._last_action_label = None
         logger.info("[%s] reset — wiped all state, idle until new mission", self.ctx.agent_id)
 
     async def _on_observation(self, obs: Observation) -> None:
         self.ctx.obs = obs
         self.ctx.view = self.view
+        # Refresh the scene's POIs from the live observation so the agent reasons
+        # over the CURRENT scenario's points of interest (buoy, rendezvous, …),
+        # not the ones present when it first connected.
+        if obs.pois:
+            self.scene.pois = [
+                ScenePOI(id=str(p.get("id", "")), label=str(p.get("label", "")),
+                         lat=float((p.get("position") or {}).get("lat", 0.0)),
+                         lon=float((p.get("position") or {}).get("lon", 0.0)))
+                for p in obs.pois
+            ]
+        elif self.scene.pois:
+            self.scene.pois = []
+        # Keep the operating area in sync with the live selection so the agent
+        # grounds "the area" / "the perimeter" in real geometry.
+        self.scene.set_area_from_aor(obs.aor)
         self.ctx.scene = self.scene
         self.view.tick(obs.world_time)
 
@@ -159,10 +190,16 @@ class AgentBrain:
         if not self._handle_mission(obs):
             return
 
-        # decide (LLM) on interval or event, honouring any rate-limit cooldown.
-        # An urgent trigger (new contact in range) bypasses the min interval.
+        # EVENT-DRIVEN decision. Re-think only when something has changed (new
+        # contact / peer message / mission), when we're idle (no active action to
+        # run), or on a slow heartbeat — NOT on a fast timer while an action is
+        # still executing. This is what stops the hold↔go_to oscillation: once an
+        # agent commits to a move, it lets it run until it arrives or an event
+        # interrupts, instead of re-deciding (and flip-flopping) every few seconds.
         now = time.monotonic()
-        due = self._dirty or (now - self._last_decision) >= self.decision_interval
+        has_action = self.active_tool is not None
+        heartbeat_due = (now - self._last_decision) >= self.decision_interval
+        due = self._dirty or (not has_action) or heartbeat_due
         min_gap = 0.0 if self._urgent else MIN_DECISION_INTERVAL_S
         if (not self._thinking and due and now >= self._cooldown_until
                 and (now - self._last_decision) >= min_gap):
@@ -228,6 +265,24 @@ class AgentBrain:
         })
 
     # ── decision ─────────────────────────────────────────────────────────────
+    def _build_feedback(self, obs: Observation) -> str:
+        """Plain-language outcome of the last decision: did we move, where are we
+        against our task. Lets the model self-correct from consequences instead of
+        being told rules (e.g. it sees a go_to that produced no movement)."""
+        parts: list[str] = []
+        if self._last_action_label:
+            parts.append(f"last action: {self._last_action_label}")
+        if self._decision_pos is not None:
+            moved_km = haversine_km(self._decision_pos[0], self._decision_pos[1], obs.lat, obs.lon)
+            parts.append("you moved " + (f"{moved_km * 1000:.0f} m" if moved_km < 1.0 else f"{moved_km:.1f} km")
+                         + " since then")
+            label = self._last_action_label or ""
+            if moved_km < 0.03 and any(label.startswith(t) for t in _MOVE_TOOLS):
+                parts.append("you barely moved — your target may equal your current position or you're "
+                             "blocked; choose a DIFFERENT target if you meant to reposition")
+        parts.append(f"current task: {self._current_task or 'idle'}")
+        return "; ".join(parts)
+
     def _context(self) -> tuple[list, list, list]:
         peers = [{"id": pid, "type": p.agent_type, "lat": p.lat, "lon": p.lon, "task": p.task}
                  for pid in self.view.live_peer_ids() if (p := self.view.peers.get(pid))]
@@ -258,13 +313,16 @@ class AgentBrain:
                 except RuntimeError:  # loop shutting down
                     pass
 
+            feedback = self._build_feedback(obs)
+
             # The swarm-wide gate serialises and spaces LLM calls so three agents
             # share the Groq token budget fairly instead of one starving the rest.
             async with self.gate.slot(self.ctx.agent_id, urgent=urgent):
                 d = await asyncio.to_thread(
                     self.decider.decide, obs, self.ctx, self.scene, self.mission,
                     peers, shared, messages, self._current_task, self.registry,
-                    task_status, silent, list(self._outbox), self.is_leader, emit)
+                    task_status, silent, list(self._outbox), self.is_leader, emit,
+                    self._plan, feedback)
 
             # A reset happened while this decision was in flight (LLM latency):
             # drop it entirely so it can't move the agent or re-populate state.
@@ -273,6 +331,12 @@ class AgentBrain:
                 return
 
             await self.client.send_cot("\n")  # terminate this cycle's streamed line
+
+            # Carry the agent's self-authored plan forward to the next turn, and
+            # record where we were when we decided (for movement feedback).
+            if d.get("plan"):
+                self._plan = d["plan"]
+            self._decision_pos = (obs.lat, obs.lon)
 
             for m in d["messages"]:
                 await self.client.send_p2p(m["to"], m["type"], {"text": m["content"]}, reasoning=m["content"])
@@ -303,6 +367,7 @@ class AgentBrain:
                     try:
                         self.active_tool = self.registry.build(spec[0], spec[1], self.ctx)
                         self._action_spec = spec
+                        self._last_action_label = f"{spec[0]}({', '.join(str(v) for v in spec[1].values())})"
                         logger.info("[%s] decision: %s | %s",
                                     self.ctx.agent_id, self.active_tool.describe(), reasoning[:80])
                     except ToolError as exc:

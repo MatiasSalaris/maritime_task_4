@@ -8,6 +8,7 @@ from models.world import Contact, ContactStatus, Geofence, POI, WorldState
 from providers.base import AbstractPlatformProvider
 from providers.simulation.physics import move, distance_km
 from providers.simulation.synthetic_ais import initial_contacts
+from providers.simulation.scenarios import build_scenario
 
 # ── Demo area: Strait of Sicily ───────────────────────────────────────────────
 _BOUNDS = dict(lat_min=37.42, lat_max=37.60, lon_min=15.00, lon_max=15.28)
@@ -116,6 +117,8 @@ class SimulatedPlatformProvider(AbstractPlatformProvider):
             messages_inbox=[m.model_dump() for m in inbox],
             world_time=self.world_time,
             mission=mission,
+            pois=[p.model_dump() for p in self.pois],
+            aor=self.aor,
         )
 
     def _leader_id(self) -> str | None:
@@ -202,6 +205,30 @@ class SimulatedPlatformProvider(AbstractPlatformProvider):
         self._detection_state: dict[str, str] = {}
         self._pending_events.clear()
         self._nato_counter = 0
+
+    async def load_scenario(self, scenario_id: str) -> dict:
+        """Reconfigure the world for a chosen scenario and set its mission.
+
+        Resets agents to spawn, rebuilds the contacts/POIs/operating-area from
+        the scenario definition, and returns the scenario's natural-language
+        mission for the lead asset.
+        """
+        await self.reset()
+        sc = build_scenario(scenario_id)
+        self.contacts = sc["contacts"]
+        self.pois = sc["pois"]   # only scenarios that define POIs show any (no demo fallback)
+        self.aor = sc["aor"]
+        self.mission = sc["mission"]
+        # Spread the agents out for a randomised scenario so they don't all
+        # start clustered (the 'open sea' picture has no fixed formation).
+        if scenario_id == "random":
+            import random
+            b = _BOUNDS
+            for agent in self.agents:
+                agent.position = Position(
+                    lat=round(random.uniform(b["lat_min"], b["lat_max"]), 4),
+                    lon=round(random.uniform(b["lon_min"], b["lon_max"]), 4))
+        return {"scenario": scenario_id, "mission": self.mission}
 
     async def update_agent_cot(self, agent_id: str, chunk: str) -> None:
         agent = self._agent(agent_id)

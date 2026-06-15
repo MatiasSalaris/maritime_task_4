@@ -11,11 +11,13 @@
   import { MilitaryGrid }         from './map/MilitaryGrid.js'
   import { AreaSelector }         from './map/AreaSelector.js'
   import { OperatingAreaLayer }   from './map/OperatingAreaLayer.js'
+  import { POILayer }             from './map/POILayer.js'
   import SidePanel                from './ui/SidePanel.svelte'
   import OverlayPicker            from './ui/OverlayPicker.svelte'
   import ThoughtBubbles           from './ui/ThoughtBubbles.svelte'
   import MapTools                 from './ui/MapTools.svelte'
   import SpeedControls            from './ui/SpeedControls.svelte'
+  import ScenarioPicker           from './ui/ScenarioPicker.svelte'
   import { selectedAgentId }      from './store/worldStore.js'
 
   const AGENT_IDS = ['agent_0', 'agent_1', 'agent_2']
@@ -23,12 +25,20 @@
 
   let mapContainer
   let mapMgr, agentLayer, pathLayer, contactLayer, animCanvas
-  let sensorLayer
+  let sensorLayer, poiLayer
   let militaryGrid, areaSelector, areaLayer
   let wsClient
   let ready = false
 
   // ── AOR tool state ─────────────────────────────────────────────────────────
+  let scenarioOpen = true     // scenario picker shown on startup
+  let activeScenario = null   // {name, tag, ...} of the running scenario
+
+  function onScenarioSelected(s) {
+    activeScenario = s
+    scenarioOpen = false
+  }
+
   let drawMode    = null    // 'rect' | 'circle' | 'poly' | null
   let gridEnabled = false
   let hasArea     = false
@@ -45,6 +55,7 @@
     // Cache contacts; detection + reveal happen at 60 fps in renderFrame, using
     // the interpolated agent positions (consistent with the drawn sensor rings).
     contactLayer?.update($worldState.contacts ?? [], $godView, $worldState.time)
+    poiLayer?.update($worldState.pois ?? [])
   }
 
   // Detect a world reset (path history collapses to empty) → wipe track memory
@@ -141,6 +152,8 @@
     areaLayer.init()
     pathLayer.init()
     contactLayer.init()
+    poiLayer = new POILayer(map)
+    poiLayer.init()
 
     // Live sensor footprint rings (computed client-side from agent positions)
     sensorLayer = new SensorLayer(map, AGENT_IDS)
@@ -177,6 +190,7 @@
     pathLayer?.teardown()
     sensorLayer?.teardown()
     contactLayer?.teardown()
+    poiLayer?.teardown()
     areaLayer?.teardown()
     animCanvas?.destroy()
     militaryGrid?.destroy()
@@ -207,10 +221,29 @@
     />
   </div>
 
+  <!-- Active scenario banner — top-center -->
+  <div class="scenario-banner" on:click={() => (scenarioOpen = true)}
+       title="Click to change scenario">
+    <span class="sb-label">SCENARIO</span>
+    {#if activeScenario}
+      <span class="sb-tag">{activeScenario.tag}</span>
+      <span class="sb-name">{activeScenario.name}</span>
+    {:else}
+      <span class="sb-name sb-none">none — click to select</span>
+    {/if}
+  </div>
+
   <!-- Speed controls — bottom-right -->
   <div class="speed-widget">
     <SpeedControls />
   </div>
+
+  {#if scenarioOpen}
+    <ScenarioPicker
+      onSelect={onScenarioSelected}
+      onClose={activeScenario ? () => (scenarioOpen = false) : null}
+    />
+  {/if}
 
   <!-- Thought bubbles -->
   {#if ready}
@@ -258,6 +291,32 @@
     right: 14px;
     z-index: 20;
   }
+
+  .scenario-banner {
+    position: absolute;
+    top: 14px;
+    left: 50%;
+    transform: translateX(-50%);
+    z-index: 25;
+    display: flex;
+    align-items: center;
+    gap: 9px;
+    background: rgba(6, 12, 24, 0.92);
+    border: 1px solid #1a3a5a;
+    border-radius: 7px;
+    padding: 6px 14px;
+    font-family: 'Courier New', monospace;
+    cursor: pointer;
+    box-shadow: 0 0 16px rgba(0, 212, 255, 0.12);
+  }
+  .scenario-banner:hover { border-color: #00d4ff; }
+  .sb-label { font-size: 10px; letter-spacing: 0.14em; color: #4a7a9a; }
+  .sb-tag {
+    font-size: 10px; letter-spacing: 0.08em; color: #00d4ff;
+    border: 1px solid #00d4ff55; border-radius: 3px; padding: 1px 6px;
+  }
+  .sb-name { font-size: 13px; font-weight: bold; color: #e0f0ff; letter-spacing: 0.04em; }
+  .sb-none { color: #6a8a9a; font-weight: normal; }
 
   .bubbles-layer {
     position: absolute;

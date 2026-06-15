@@ -60,6 +60,8 @@ class Observation:
     inbox: list[dict[str, Any]] = field(default_factory=list)
     world_time: float = 0.0
     mission: str | None = None
+    pois: list[dict[str, Any]] = field(default_factory=list)
+    aor: dict[str, Any] | None = None
 
     @classmethod
     def from_payload(cls, payload: dict[str, Any]) -> "Observation":
@@ -75,6 +77,8 @@ class Observation:
             inbox=list(payload.get("messages_inbox", [])),
             world_time=float(payload.get("world_time", 0.0) or 0.0),
             mission=payload.get("mission"),
+            pois=list(payload.get("pois", [])),
+            aor=payload.get("aor"),
         )
 
     def contact(self, contact_id: str) -> SensedContact | None:

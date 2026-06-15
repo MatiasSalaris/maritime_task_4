@@ -120,6 +120,7 @@ def normalise_decision(raw: dict[str, Any]) -> dict[str, Any]:
 
     return {
         "reasoning": str(raw.get("reasoning") or "").strip(),
+        "plan": str(raw.get("plan") or "").strip(),
         "messages": messages[:3],
         "tool": tool,
         "args": args,
@@ -134,6 +135,7 @@ class AgentDecider(Protocol):
         task_status: str = "idle", silent_peers: list[str] | None = None,
         outbox: list[dict[str, Any]] | None = None, is_leader: bool = False,
         on_token: Callable[[str], None] | None = None,
+        plan: str | None = None, feedback: str | None = None,
     ) -> dict[str, Any]:
         ...
 
@@ -171,10 +173,11 @@ class LLMDecider:
         self.providers = providers
 
     def decide(self, obs, ctx, scene, mission, peers, shared_contacts, messages, current_task, registry,
-               task_status="idle", silent_peers=None, outbox=None, is_leader=False, on_token=None):
+               task_status="idle", silent_peers=None, outbox=None, is_leader=False, on_token=None,
+               plan=None, feedback=None):
         user_prompt = build_decision_user_prompt(
             obs, ctx, scene, mission, peers, shared_contacts, messages, current_task,
-            task_status, silent_peers, outbox, is_leader)
+            task_status, silent_peers, outbox, is_leader, plan, feedback)
         system_prompt = build_decision_system_prompt(registry, is_leader)
 
         now = time.monotonic()
@@ -196,6 +199,7 @@ class LLMDecider:
                                 ctx.agent_id, provider.name, provider.model)
                 return normalise_decision({
                     "reasoning": reasoning,
+                    "plan": action_obj.get("plan"),
                     "messages": action_obj.get("messages"),
                     "action": action_obj.get("action"),
                 })

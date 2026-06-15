@@ -54,3 +54,5 @@ class Observation(BaseModel):
     messages_inbox: list[dict] = []
     world_time: float
     mission: Optional[str] = None
+    pois: list[dict] = []           # scenario points of interest (buoy, rendezvous, …)
+    aor: Optional[dict] = None      # selected operating area (GeoJSON polygon), if any

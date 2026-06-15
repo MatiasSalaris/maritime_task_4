@@ -31,6 +31,30 @@ async def change_mission(body: MissionPayload) -> dict:
     return {"ok": True, "mission": body.text}
 
 
+class ScenarioPayload(BaseModel):
+    id: str
+
+
+@router.get("/scenarios")
+async def get_scenarios() -> dict:
+    from providers.simulation.scenarios import list_scenarios
+    return {"scenarios": list_scenarios()}
+
+
+@router.post("/scenario")
+async def load_scenario(body: ScenarioPayload) -> dict:
+    """Switch the world to a scenario: wipe agents, rebuild the world, set its
+    mission, and resume. The lead asset then briefs the peers on the new intent."""
+    engine = app_state.engine
+    engine.paused = True
+    for agent_id in manager.connected_agent_ids():
+        await manager.send_to_agent(agent_id, {"type": "reset"})
+    result = await engine.provider.load_scenario(body.id)
+    message_bus.clear()
+    engine.paused = False
+    return {"ok": True, **result}
+
+
 class SpeedPayload(BaseModel):
     scale: float  # sim-time multiplier, e.g. 0.5, 1, 2, 4
 
